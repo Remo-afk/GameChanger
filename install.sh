@@ -1,6 +1,6 @@
 #!/bin/bash
 # GameChanger Ultimate Installer
-# All-in-One: Hauptprogramm + Game Profiler + OpenRGB-Server
+# All-in-One: Hauptprogramm + Game Profiler + OpenRGB-Server + Draggable Dashboard
 
 set -e
 
@@ -31,7 +31,7 @@ mkdir -p ~/.config/autostart
 mkdir -p ~/.config/gamechanger/profiles
 mkdir -p ~/.config/gamechanger/games
 
-# ========== 4. HAUPTPROGRAMM ==========
+# ========== 4. HAUPTPROGRAMM (mit Draggable Dashboard) ==========
 echo ""
 echo "🐍 Installiere GameChanger..."
 cat > ~/.local/share/gamechanger/gamechanger.py << 'EOF'
@@ -78,7 +78,6 @@ def start_openrgb_server():
     return False
 
 def start_game_profiler():
-    """Startet den Game Profiler im Hintergrund"""
     profiler_script = os.path.expanduser("~/.config/gamechanger/game_profiler.sh")
     if os.path.exists(profiler_script):
         subprocess.Popen(["bash", profiler_script], 
@@ -258,7 +257,7 @@ def system_update():
     subprocess.Popen([TERMINAL, "-e", "bash", "-c", 
         f"echo '🔄 System-Update...'; {cmd}; echo ''; echo '✅ Fertig! Drücke Enter'; read"])
 
-# ========== SCHWEBENDES DASHBOARD ==========
+# ========== SCHWEBENDES DASHBOARD (mit Dragging) ==========
 class FloatingDashboard:
     def __init__(self, parent):
         self.parent = parent
@@ -270,6 +269,20 @@ class FloatingDashboard:
         self.window.set_decorated(False)
         self.window.set_keep_above(False)
         
+        # Dragging Variablen
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.dragging = False
+        
+        # Event-Handler für Dragging
+        self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | 
+                               Gdk.EventMask.BUTTON_RELEASE_MASK | 
+                               Gdk.EventMask.POINTER_MOTION_MASK)
+        self.window.connect("button-press-event", self.on_button_press)
+        self.window.connect("button-release-event", self.on_button_release)
+        self.window.connect("motion-notify-event", self.on_motion)
+        
+        # CSS
         css = b"""
         window {
             background-color: rgba(30, 30, 46, 0.95);
@@ -356,6 +369,22 @@ class FloatingDashboard:
         self.box.pack_start(update_btn, False, False, 0)
         
         self.window.show_all()
+    
+    def on_button_press(self, widget, event):
+        if event.button == 1:
+            self.drag_start_x = event.x_root - self.window.get_position()[0]
+            self.drag_start_y = event.y_root - self.window.get_position()[1]
+            self.dragging = True
+    
+    def on_button_release(self, widget, event):
+        if event.button == 1:
+            self.dragging = False
+    
+    def on_motion(self, widget, event):
+        if self.dragging:
+            new_x = int(event.x_root - self.drag_start_x)
+            new_y = int(event.y_root - self.drag_start_y)
+            self.window.move(new_x, new_y)
     
     def refresh(self, devices):
         for child in self.device_container.get_children():
@@ -570,12 +599,13 @@ nohup python3 ~/.local/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
 EOF
 chmod +x ~/.local/bin/gamechanger
 
-# ========== 6. GAME PROFILER ==========
+# ========== 6. GAME PROFILER (mit OpenRGB-Warteschleife) ==========
 echo ""
 echo "🎮 Installiere Game Profiler..."
 cat > ~/.config/gamechanger/game_profiler.sh << 'EOF'
 #!/bin/bash
 # GameChanger Game Profiler - Automatische RGB Profile
+# Mit OpenRGB-Warteschleife
 
 PROFILES_DIR="$HOME/.config/gamechanger/profiles"
 mkdir -p "$PROFILES_DIR"
@@ -599,6 +629,14 @@ load_profile() {
         notify-send -a "GameChanger" "🎨 RGB" "$profile aktiviert"
     fi
 }
+
+echo "🔍 Warte auf OpenRGB..."
+until openrgb --version > /dev/null 2>&1; do
+    echo "⏳ OpenRGB noch nicht bereit, warte 2 Sekunden..."
+    sleep 2
+done
+echo "✅ OpenRGB gefunden!"
+echo "🎮 Game Profiler gestartet"
 
 while true; do
     if pgrep -f "ffxiv" > /dev/null || pgrep -f "FINAL" > /dev/null; then
@@ -665,5 +703,6 @@ echo ""
 echo "🚀 Starte mit: gamechanger"
 echo "🔄 Das Icon erscheint in der Taskleiste"
 echo "🎮 Game Profiler: FFXIV → Rot, Desktop → Grün"
+echo "🖱️ Dashboard: Mit Maus verschiebbar!"
 echo ""
 echo "💡 Nach dem Neustart startet GameChanger automatisch!"
