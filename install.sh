@@ -1,6 +1,6 @@
 #!/bin/bash
-# GameChanger Ultimate - Das Gaming Kontrollzentrum!
-# Mit System-Update Funktion!
+# GameChanger Ultimate - All-in-One Installer
+# Funktioniert lokal + AUR
 
 set -e
 
@@ -27,14 +27,11 @@ mkdir -p ~/.local/bin
 mkdir -p ~/.local/share/gamechanger
 mkdir -p ~/.config/autostart
 
-# ============================================================
-# Hauptprogramm mit Update-Button!
-# ============================================================
+# Hauptprogramm installieren
 cat > ~/.local/share/gamechanger/gamechanger.py << 'EOF'
 #!/usr/bin/env python3
 """
 GameChanger Ultimate - Gaming Kontrollzentrum
-Mit LED-Farben, Dashboard und System-Update!
 """
 
 import os
@@ -46,11 +43,11 @@ import glob
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
-from gi.repository import Gtk, GLib, AppIndicator3, GdkPixbuf
+from gi.repository import Gtk, GLib, AppIndicator3
 
 SYS_PATH = "/sys/class/power_supply/"
 
-# ========== LED CONTROLLER (Thread-Safe) ==========
+# ========== LED Controller ==========
 class RGB_LED:
     def __init__(self):
         self.leds = self.find_leds()
@@ -116,8 +113,7 @@ class RGB_LED:
     def is_running(self):
         return self.running
 
-# ========== AKKU LOGIK ==========
-
+# ========== Akku Logik ==========
 def get_devices():
     devices = []
     if not os.path.exists(SYS_PATH):
@@ -155,27 +151,14 @@ def get_devices():
     return devices
 
 def system_update():
-    """Führt System-Update durch (in neuem Terminal)"""
-    try:
-        # Prüfe ob cachyos-rate-mirrors verfügbar
-        if os.path.exists("/usr/bin/cachyos-rate-mirrors"):
-            cmd = "cachyos-rate-mirrors && sudo pacman -Syu"
-        else:
-            cmd = "sudo pacman -Syu"
-        
-        subprocess.Popen([
-            "konsole", "-e", "bash", "-c", 
-            f"echo '🔄 System-Update wird gestartet...'; {cmd}; echo ''; echo '✅ Fertig! Drücke Enter zum Schließen'; read"
-        ])
-    except:
-        # Fallback: xterm oder gnome-terminal
-        subprocess.Popen([
-            "xterm", "-e", "bash", "-c",
-            f"echo '🔄 System-Update...'; {cmd}; echo ''; echo 'Fertig! Drücke Enter'; read"
-        ])
+    if os.path.exists("/usr/bin/cachyos-rate-mirrors"):
+        cmd = "cachyos-rate-mirrors && sudo pacman -Syu"
+    else:
+        cmd = "sudo pacman -Syu"
+    subprocess.Popen(["konsole", "-e", "bash", "-c", 
+        f"echo '🔄 System-Update...'; {cmd}; echo ''; echo '✅ Fertig! Drücke Enter'; read"])
 
-# ========== HAUPTKLASSE ==========
-
+# ========== Hauptklasse ==========
 class GameChanger:
     def __init__(self):
         self.indicator = AppIndicator3.Indicator.new("gamechanger", "input-gaming", AppIndicator3.IndicatorCategory.SYSTEM_SERVICES)
@@ -195,39 +178,31 @@ class GameChanger:
         self.menu.append(self.device_info)
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        # RGB Farben Menü
         rgb_menu = Gtk.MenuItem(label="🌈 RGB Farben")
         rgb_sub = Gtk.Menu()
-        for name, pattern in [("🔴 Rot (schnell)", "rot"), ("🟢 Grün (langsam)", "gruen"), 
-                               ("🔵 Blau (doppel)", "blau"), ("🟡 Gelb (dauerhaft)", "gelb"), 
-                               ("⚪ Aus", "aus")]:
+        for name, pattern in [("🔴 Rot", "rot"), ("🟢 Grün", "gruen"), ("🔵 Blau", "blau"), ("🟡 Gelb", "gelb"), ("⚪ Aus", "aus")]:
             item = Gtk.MenuItem(label=name)
-            item.connect("activate", self.set_led_pattern, pattern)
+            item.connect("activate", self.set_led, pattern)
             rgb_sub.append(item)
         rgb_menu.set_submenu(rgb_sub)
         self.menu.append(rgb_menu)
         
-        # Dashboard
         dash = Gtk.MenuItem(label="📊 Dashboard")
         dash.connect("activate", self.open_dashboard)
         self.menu.append(dash)
         
         self.menu.append(Gtk.SeparatorMenuItem())
-        
-        # SYSTEM UPDATE BUTTON! 🔥
         update_item = Gtk.MenuItem(label="🔄 System Update")
-        update_item.connect("activate", self.do_system_update)
+        update_item.connect("activate", lambda w: threading.Thread(target=system_update, daemon=True).start())
         self.menu.append(update_item)
         
         self.menu.append(Gtk.SeparatorMenuItem())
-        
-        # Beenden
         quit_item = Gtk.MenuItem(label="❌ Beenden")
         quit_item.connect("activate", Gtk.main_quit)
         self.menu.append(quit_item)
         self.menu.show_all()
     
-    def set_led_pattern(self, widget, pattern):
+    def set_led(self, w, pattern):
         if pattern == "aus":
             self.rgb.stop()
         else:
@@ -235,10 +210,6 @@ class GameChanger:
                 self.rgb.stop()
                 time.sleep(0.1)
             threading.Thread(target=self.rgb.blink_pattern, args=(pattern, 2), daemon=True).start()
-    
-    def do_system_update(self, widget):
-        """System Update ausführen"""
-        threading.Thread(target=system_update, daemon=True).start()
     
     def update(self):
         devices = get_devices()
@@ -271,93 +242,35 @@ class GameChanger:
         return True
     
     def open_dashboard(self, w):
-        win = Gtk.Window(title="🎮 GameChanger Dashboard")
+        win = Gtk.Window(title="GameChanger Dashboard")
         win.set_default_size(450, 450)
         win.set_position(Gtk.WindowPosition.CENTER)
         win.set_border_width(15)
-        
-        # CSS
-        css = b"""
-        window { background-color: #1e1e2e; }
-        label { color: #cdd6f4; }
-        .title { font-size: 18px; font-weight: bold; color: #a6e3a1; }
-        .device { background-color: #313244; border-radius: 8px; padding: 8px; margin: 5px; }
-        .update-btn { background-color: #a6e3a1; color: #1e1e2e; font-weight: bold; }
-        """
-        css_provider = Gtk.CssProvider()
-        css_provider.load_from_data(css)
-        screen = Gtk.Window.get_screen(win)
-        Gtk.StyleContext.add_provider_for_screen(screen, css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         win.add(box)
         
         title = Gtk.Label()
         title.set_markup("<span size='x-large'>🎮 GameChanger Kontrollzentrum</span>")
-        title.get_style_context().add_class("title")
         box.pack_start(title, False, False, 0)
         
-        # Geräte anzeigen
         devices = get_devices()
         for icon, name, level, charging in devices:
-            device_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-            device_box.get_style_context().add_class("device")
-            
-            header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            name_label = Gtk.Label()
-            name_label.set_markup(f"<span size='large'>{icon} {name}</span>")
-            name_label.set_halign(Gtk.Align.START)
-            header.pack_start(name_label, True, True, 0)
-            
-            if charging:
-                charge = Gtk.Label()
-                charge.set_markup("<span color='#a6e3a1'>⚡ LÄDT</span>")
-                header.pack_end(charge, False, False, 0)
-            
-            device_box.pack_start(header, False, False, 0)
-            
+            lbl = Gtk.Label()
             if level == "??":
-                level_label = Gtk.Label()
-                level_label.set_markup("<span color='#f9e2af'>🔍 Scanne...</span>")
+                lbl.set_markup(f"{icon} {name}: 🔍 Scanne...")
             else:
-                level_label = Gtk.Label()
-                if level <= 10:
-                    color = "#f38ba8"
-                elif level <= 20:
-                    color = "#fab387"
-                else:
-                    color = "#a6e3a1"
-                level_label.set_markup(f"<span color='{color}'><b>{level}%</b></span>")
-            
-            level_label.set_halign(Gtk.Align.START)
-            device_box.pack_start(level_label, False, False, 0)
-            box.pack_start(device_box, False, False, 0)
+                lbl.set_markup(f"{icon} {name}: {level}%")
+            box.pack_start(lbl, False, False, 0)
         
-        if not devices:
-            empty = Gtk.Label()
-            empty.set_markup("<span color='#f9e2af'>🔍 Keine Geräte gefunden</span>")
-            box.pack_start(empty, False, False, 0)
-        
-        # UPDATE BUTTON im Dashboard!
         update_btn = Gtk.Button(label="🔄 SYSTEM UPDATE")
-        update_btn.get_style_context().add_class("update-btn")
-        update_btn.connect("clicked", self.do_system_update)
+        update_btn.connect("clicked", lambda x: threading.Thread(target=system_update, daemon=True).start())
         box.pack_start(update_btn, False, False, 10)
-        
-        status = Gtk.Label()
-        status.set_markup(f"📅 {time.strftime('%H:%M:%S')}")
-        box.pack_start(status, False, False, 5)
-        
-        btn_box = Gtk.Box(spacing=10)
-        refresh_btn = Gtk.Button(label="🔄 Aktualisieren")
-        refresh_btn.connect("clicked", lambda x: win.destroy() or self.open_dashboard(None))
-        btn_box.pack_start(refresh_btn, True, True, 0)
         
         close_btn = Gtk.Button(label="❌ Schließen")
         close_btn.connect("clicked", lambda x: win.destroy())
-        btn_box.pack_start(close_btn, True, True, 0)
+        box.pack_start(close_btn, False, False, 0)
         
-        box.pack_start(btn_box, False, False, 0)
         win.show_all()
 
 if __name__ == "__main__":
@@ -367,43 +280,40 @@ EOF
 
 chmod +x ~/.local/share/gamechanger/gamechanger.py
 
-# ============================================================
-# Starter mit Single-Instance-Schutz
-# ============================================================
+# Starter
 cat > ~/.local/bin/gamechanger << 'EOF'
 #!/bin/bash
-# GameChanger Starter - Single Instance
-
 if pgrep -f "gamechanger.py" > /dev/null; then
     echo "🎮 GameChanger läuft bereits!"
     exit 0
 fi
-
 nohup python3 ~/.local/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
-echo "🎮 GameChanger gestartet!"
 EOF
 chmod +x ~/.local/bin/gamechanger
 
-# ============================================================
 # Autostart
-# ============================================================
 cat > ~/.config/autostart/gamechanger.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
 Name=GameChanger
-Comment=Gaming Kontrollzentrum
 Exec=$HOME/.local/bin/gamechanger
 Icon=battery-full
-Categories=System;Utility;
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
 
-# ============================================================
+# Desktop-Eintrag
+cat > ~/.local/share/applications/gamechanger.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=GameChanger
+Exec=$HOME/.local/bin/gamechanger
+Icon=battery-full
+Categories=System;Utility;
+Terminal=false
+EOF
+
 # Udev-Regel für LEDs
-# ============================================================
-echo ""
-echo "💡 Richte LED-Zugriff ein..."
 sudo tee /etc/udev/rules.d/99-leds.rules << 'EOF'
 SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp video /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/brightness"
 EOF
@@ -411,28 +321,7 @@ sudo udevadm control --reload-rules
 sudo groupadd video 2>/dev/null || true
 sudo usermod -aG video $USER
 
-# ============================================================
-# Desktop-Eintrag
-# ============================================================
-cat > ~/.local/share/applications/gamechanger.desktop << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=GameChanger
-Comment=Gaming Kontrollzentrum
-Exec=$HOME/.local/bin/gamechanger
-Icon=battery-full
-Categories=System;Utility;
-Terminal=false
-StartupNotify=false
-EOF
-
 echo ""
-echo "=========================================="
-echo "✅ GameChanger Ultimate installiert!"
-echo "=========================================="
-echo ""
+echo "✅ GameChanger installiert!"
 echo "🚀 Starte mit: gamechanger"
 echo "🔄 Das Icon erscheint in der Taskleiste"
-echo "🌈 RGB Farben: Klicke auf das Icon"
-echo "🔄 SYSTEM UPDATE: Im Menü oder Dashboard!"
-echo ""
