@@ -1,23 +1,4 @@
-# 1. Gehe in dein lokales GameChanger Verzeichnis
 cd /mnt/Vault/Dev/GameChanger
-
-# 2. Stelle sicher, dass die Starter-Datei existiert
-cat > gamechanger << 'EOF'
-#!/bin/bash
-if pgrep -f "gamechanger.py" > /dev/null; then
-    echo "🎮 GameChanger läuft bereits!"
-    exit 0
-fi
-nohup python3 /usr/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
-EOF
-chmod +x gamechanger
-
-# 3. Stelle sicher, dass die udev-Regel existiert
-cat > 99-leds.rules << 'EOF'
-SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp video /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/brightness"
-EOF
-
-# 4. Aktualisiere den PKGBUILD
 cat > PKGBUILD << 'EOF'
 # Maintainer: Remo-afk <remo@github.com>
 pkgname=gamechanger
@@ -38,7 +19,7 @@ package() {
     # Hauptprogramm
     install -Dm755 gamechanger.py "$pkgdir/usr/share/gamechanger/gamechanger.py"
     
-    # Starter (wichtig!)
+    # Starter – jetzt mit install, nicht cat
     install -Dm755 gamechanger "$pkgdir/usr/bin/gamechanger"
     
     # Desktop Entry
@@ -52,9 +33,20 @@ package() {
 }
 EOF
 
-# 5. Alle Dateien hinzufügen
-git add gamechanger 99-leds.rules PKGBUILD
-git commit -m "Fix PKGBUILD: add missing starter file"
+# Starter-Datei sicherstellen
+cat > gamechanger << 'EOF'
+#!/bin/bash
+if pgrep -f "gamechanger.py" > /dev/null; then
+    echo "🎮 GameChanger läuft bereits!"
+    exit 0
+fi
+nohup python3 /usr/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
+EOF
+chmod +x gamechanger
+
+# Git pushen
+git add PKGBUILD gamechanger
+git commit -m "Fix PKGBUILD: use install for starter"
 git push
 git tag -f v1.0
 git push --force --tags
