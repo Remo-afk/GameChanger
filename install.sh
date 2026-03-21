@@ -1,234 +1,278 @@
+cd /mnt/Vault/Dev/GameChanger
+
+# Erstelle die neue install.sh
+cat > install.sh << 'EOF'
 #!/bin/bash
-# ============================================================
-# GameChanger Installer - Hybrid Battery & Hardware Hub
-# ============================================================
+# GameChanger Ultimate Installer - 100% Unabhängig!
 
 set -e
 
-# Farben
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-echo -e "${BLUE}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║${RED}     🎮${YELLOW}  G A M E C H A N G E R  ${GREEN}I N S T A L L E R  ${BLUE}   🎮${BLUE}     ║${NC}"
-echo -e "${BLUE}╚══════════════════════════════════════════════════════════╝${NC}"
+echo "🎮 GameChanger Ultimate Installer"
+echo "================================"
 echo ""
 
-# ============================================================
-# 1. Prüfe Python
-# ============================================================
-echo -e "${YELLOW}📋 Schritt 1: Prüfe Python...${NC}"
+# Prüfe Python
 if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}❌ Python3 nicht gefunden!${NC}"
+    echo "❌ Python3 nicht gefunden!"
     exit 1
 fi
-echo -e "${GREEN}✅ Python3 gefunden: $(python3 --version)${NC}"
+echo "✅ Python3 gefunden: $(python3 --version)"
 
-# ============================================================
-# 2. Prüfe und installiere Pakete
-# ============================================================
-echo -e "${YELLOW}📦 Schritt 2: Prüfe benötigte Pakete...${NC}"
-
-# python-dbus
-if ! python3 -c "import dbus" 2>/dev/null; then
-    if command -v pacman &> /dev/null; then
-        sudo pacman -S python-dbus --noconfirm
-    elif command -v apt &> /dev/null; then
-        sudo apt install python3-dbus -y
-    fi
+# Installiere Abhängigkeiten
+echo ""
+echo "📦 Installiere Abhängigkeiten..."
+if command -v pacman &> /dev/null; then
+    sudo pacman -S python-gobject gtk3 libappindicator-gtk3 --noconfirm 2>/dev/null || true
 fi
 
-# python-gobject
-if ! python3 -c "from gi.repository import GLib" 2>/dev/null; then
-    if command -v pacman &> /dev/null; then
-        sudo pacman -S python-gobject --noconfirm
-    elif command -v apt &> /dev/null; then
-        sudo apt install python3-gi -y
-    fi
-fi
-echo -e "${GREEN}✅ Pakete OK${NC}"
-
-# ============================================================
-# 3. Erstelle Verzeichnisse
-# ============================================================
-echo -e "${YELLOW}📁 Schritt 3: Erstelle Verzeichnisse...${NC}"
+# Erstelle Verzeichnisse
 mkdir -p ~/.local/bin
-mkdir -p ~/.local/share/dbus-1/services
-mkdir -p ~/.config/autostart
 mkdir -p ~/.local/share/gamechanger
-echo -e "${GREEN}✅ Verzeichnisse erstellt${NC}"
+mkdir -p ~/.config/autostart
 
-# ============================================================
-# 4. Kopiere Hauptprogramm
-# ============================================================
-echo -e "${YELLOW}📄 Schritt 4: Kopiere Hauptprogramm...${NC}"
-
-if [ -f "./gamechanger.py" ]; then
-    cp ./gamechanger.py ~/.local/share/gamechanger/gamechanger.py
-else
-    echo -e "${RED}❌ gamechanger.py nicht gefunden!${NC}"
-    exit 1
-fi
-chmod +x ~/.local/share/gamechanger/gamechanger.py
-echo -e "${GREEN}✅ Hauptprogramm installiert${NC}"
-
-# ============================================================
-# 5. Erstelle DBus Service
-# ============================================================
-echo -e "${YELLOW}🔌 Schritt 5: Erstelle DBus Service...${NC}"
-
-cat > ~/.local/bin/gamechanger_dbus.py << 'EOFDBUS'
+# Hauptprogramm
+cat > ~/.local/share/gamechanger/gamechanger.py << 'PYEOF'
 #!/usr/bin/env python3
+"""
+GameChanger - 100% UNABHÄNGIG! Nutzt NATIVE LEDs!
+"""
+
 import os
-import subprocess
-import json
 import time
-import dbus
-import dbus.service
-from dbus.mainloop.glib import DBusGMainLoop
-from gi.repository import GLib
+import subprocess
+import threading
+import gi
+import glob
+
+gi.require_version('Gtk', '3.0')
+gi.require_version('AppIndicator3', '0.1')
+from gi.repository import Gtk, GLib, AppIndicator3
 
 SYS_PATH = "/sys/class/power_supply/"
-CHECK_INTERVAL = 30
-GAMECHANGER_PATH = os.path.expanduser("~/.local/share/gamechanger/gamechanger.py")
 
-def get_battery_data():
-    result = subprocess.run(["python3", GAMECHANGER_PATH, "--once"], capture_output=True, text=True)
-    return {"devices": result.stdout.strip().split("\n"), "timestamp": time.time()}
-
-class GameChangerDBus(dbus.service.Object):
+class RGB_LED:
     def __init__(self):
-        bus_name = dbus.service.BusName("org.gamechanger", bus=dbus.SessionBus())
-        dbus.service.Object.__init__(self, bus_name, "/org/gamechanger")
-        self.start_timer()
+        self.leds = self.find_leds()
+        self.running = False
+        
+    def find_leds(self):
+        leds = []
+        for pattern in ["/sys/class/leds/*capslock*/brightness", "/sys/class/leds/*numlock*/brightness"]:
+            for path in glob.glob(pattern):
+                if os.path.exists(path):
+                    leds.append(path)
+        return leds
     
-    def start_timer(self):
-        def update():
-            self.update_data()
-            return True
-        GLib.timeout_add_seconds(CHECK_INTERVAL, update)
+    def set_leds(self, state):
+        for led in self.leds:
+            try:
+                with open(led, 'w') as f:
+                    f.write("1" if state else "0")
+            except:
+                pass
     
-    def update_data(self):
-        data = get_battery_data()
-        self.DataUpdated(json.dumps(data))
+    def blink_pattern(self, pattern, duration=3):
+        if not self.leds:
+            return
+        self.running = True
+        if pattern == "rot":
+            for _ in range(duration * 5):
+                if not self.running: break
+                self.set_leds(True); time.sleep(0.1)
+                self.set_leds(False); time.sleep(0.1)
+        elif pattern == "gruen":
+            for _ in range(duration):
+                if not self.running: break
+                self.set_leds(True); time.sleep(0.5)
+                self.set_leds(False); time.sleep(0.5)
+        elif pattern == "blau":
+            for _ in range(duration):
+                if not self.running: break
+                self.set_leds(True); time.sleep(0.2)
+                self.set_leds(False); time.sleep(0.1)
+                self.set_leds(True); time.sleep(0.2)
+                self.set_leds(False); time.sleep(0.3)
+        elif pattern == "gelb":
+            self.set_leds(True); time.sleep(duration)
+            self.set_leds(False)
+        elif pattern == "alarm":
+            for _ in range(duration * 10):
+                if not self.running: break
+                self.set_leds(True); time.sleep(0.05)
+                self.set_leds(False); time.sleep(0.05)
+        self.set_leds(False)
+        self.running = False
+    
+    def stop(self):
+        self.running = False
+        self.set_leds(False)
+
+def get_devices():
+    devices = []
+    if not os.path.exists(SYS_PATH):
+        return devices
+    for entry in os.listdir(SYS_PATH):
+        if entry.startswith(("AC", "ADP", "ACAD")):
+            continue
+        cap = os.path.join(SYS_PATH, entry, "capacity")
+        if not os.path.exists(cap):
+            continue
+        try:
+            with open(cap) as f:
+                level = int(f.read().strip())
+            status = os.path.join(SYS_PATH, entry, "status")
+            charging = False
+            if os.path.exists(status):
+                with open(status) as f:
+                    charging = "charging" in f.read().strip().lower()
+            icon, name = "🔋", entry
+            if "hidpp_battery_0" in entry:
+                icon, name = "🖱️", "Logitech G502 X"
+            elif "hidpp_battery_1" in entry:
+                icon, name = "⌨️", "Logitech G515"
+            elif "ps" in entry.lower():
+                icon, name = "🎮", "PS5 DualSense"
+            devices.append((icon, name, level, charging))
+        except:
+            pass
+    try:
+        usb = subprocess.run(["lsusb", "-d", "10d6:4801"], capture_output=True, timeout=2)
+        if usb.stdout.strip():
+            devices.append(("🎧", "NUBWO G06", "??", False))
+    except:
+        pass
+    return devices
+
+class GameChanger:
+    def __init__(self):
+        self.indicator = AppIndicator3.Indicator.new("gamechanger", "input-gaming", AppIndicator3.IndicatorCategory.SYSTEM_SERVICES)
+        self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self.rgb = RGB_LED()
+        self.last_alarm = {}
+        self.build_menu()
+        self.indicator.set_menu(self.menu)
+        GLib.timeout_add_seconds(30, self.update)
+        self.update()
+        print("🎮 GameChanger läuft (OHNE OpenRGB!)")
+
+    def build_menu(self):
+        self.menu = Gtk.Menu()
+        self.device_info = Gtk.MenuItem(label="🔍 Scanne...")
+        self.device_info.set_sensitive(False)
+        self.menu.append(self.device_info)
+        self.menu.append(Gtk.SeparatorMenuItem())
+        
+        rgb_menu = Gtk.MenuItem(label="🌈 RGB Farben")
+        rgb_sub = Gtk.Menu()
+        for name, pattern in [("🔴 Rot", "rot"), ("🟢 Grün", "gruen"), ("🔵 Blau", "blau"), ("🟡 Gelb", "gelb"), ("⚪ Aus", "aus")]:
+            item = Gtk.MenuItem(label=name)
+            item.connect("activate", self.set_led, pattern)
+            rgb_sub.append(item)
+        rgb_menu.set_submenu(rgb_sub)
+        self.menu.append(rgb_menu)
+        
+        dash = Gtk.MenuItem(label="📊 Dashboard")
+        dash.connect("activate", self.open_dashboard)
+        self.menu.append(dash)
+        
+        self.menu.append(Gtk.SeparatorMenuItem())
+        quit_item = Gtk.MenuItem(label="❌ Beenden")
+        quit_item.connect("activate", Gtk.main_quit)
+        self.menu.append(quit_item)
+        self.menu.show_all()
+    
+    def set_led(self, w, pattern):
+        if pattern == "aus":
+            self.rgb.stop()
+        else:
+            threading.Thread(target=self.rgb.blink_pattern, args=(pattern, 2), daemon=True).start()
+    
+    def update(self):
+        devices = get_devices()
+        count = len(devices)
+        lowest = min([l for _, _, l, _ in devices if l != "??"], default=100)
+        
+        if count == 0:
+            self.indicator.set_icon("battery-missing")
+            self.device_info.set_label("🔍 Keine Geräte")
+        elif lowest <= 10:
+            self.indicator.set_icon("battery-caution")
+            self.device_info.set_label(f"🚨 {count} Geräte - KRITISCH!")
+            threading.Thread(target=self.rgb.blink_pattern, args=("alarm", 2), daemon=True).start()
+        elif lowest <= 20:
+            self.indicator.set_icon("battery-low")
+            self.device_info.set_label(f"⚠️ {count} Geräte - niedrig")
+        else:
+            self.indicator.set_icon("input-gaming")
+            self.device_info.set_label(f"🎮 {count} Geräte")
+        
+        for _, name, level, _ in devices:
+            if level != "??" and level <= 15 and level != self.last_alarm.get(name, 100):
+                subprocess.run(["notify-send", "-u", "critical", f"⚠️ {name}", f"{level}%!"])
+                threading.Thread(target=self.rgb.blink_pattern, args=("alarm", 3), daemon=True).start()
+                self.last_alarm[name] = level
         return True
     
-    @dbus.service.method("org.gamechanger", in_signature='', out_signature='s')
-    def GetData(self):
-        return json.dumps(get_battery_data())
-    
-    @dbus.service.signal("org.gamechanger", signature='s')
-    def DataUpdated(self, data):
-        pass
-
-def main():
-    DBusGMainLoop(set_as_default=True)
-    loop = GLib.MainLoop()
-    service = GameChangerDBus()
-    try:
-        loop.run()
-    except KeyboardInterrupt:
-        pass
+    def open_dashboard(self, w):
+        win = Gtk.Window(title="🎮 GameChanger")
+        win.set_default_size(400, 350)
+        win.set_position(Gtk.WindowPosition.CENTER)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        win.add(box)
+        for icon, name, level, charging in get_devices():
+            lbl = Gtk.Label()
+            if level == "??":
+                lbl.set_markup(f"{icon} {name}: 🔍 Scanne...")
+            else:
+                lbl.set_markup(f"{icon} {name}: {level}%")
+            box.pack_start(lbl, False, False, 0)
+        btn = Gtk.Button(label="❌ Schließen")
+        btn.connect("clicked", lambda x: win.destroy())
+        box.pack_start(btn, False, False, 0)
+        win.show_all()
 
 if __name__ == "__main__":
-    main()
-EOFDBUS
+    hub = GameChanger()
+    Gtk.main()
+PYEOF
 
-chmod +x ~/.local/bin/gamechanger_dbus.py
-echo -e "${GREEN}✅ DBus Service erstellt${NC}"
+chmod +x ~/.local/share/gamechanger/gamechanger.py
 
-# ============================================================
-# 6. DBus Service Datei
-# ============================================================
-cat > ~/.local/share/dbus-1/services/org.gamechanger.service << 'EOFSERVICE'
-[D-BUS Service]
-Name=org.gamechanger
-Exec=/usr/bin/python3 $HOME/.local/bin/gamechanger_dbus.py
-EOFSERVICE
-echo -e "${GREEN}✅ DBus registriert${NC}"
+# Starter
+cat > ~/.local/bin/gamechanger << 'EOF'
+#!/bin/bash
+nohup python3 ~/.local/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
+EOF
+chmod +x ~/.local/bin/gamechanger
 
-# ============================================================
-# 7. Autostart
-# ============================================================
-cat > ~/.config/autostart/gamechanger-dbus.desktop << 'EOFAUTO'
+# Autostart
+cat > ~/.config/autostart/gamechanger.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
-Name=GameChanger DBus Service
-Exec=/usr/bin/python3 $HOME/.local/bin/gamechanger_dbus.py
+Name=GameChanger
+Exec=$HOME/.local/bin/gamechanger
 Icon=battery-full
+Terminal=false
 X-GNOME-Autostart-enabled=true
-EOFAUTO
-echo -e "${GREEN}✅ Autostart eingerichtet${NC}"
-
-# ============================================================
-# 8. Alias für Fish/Bash
-# ============================================================
-if [ -d ~/.config/fish ]; then
-    if ! grep -q "alias gc" ~/.config/fish/config.fish 2>/dev/null; then
-        echo 'alias gc="python3 ~/.local/share/gamechanger/gamechanger.py"' >> ~/.config/fish/config.fish
-        echo 'alias gamechanger="python3 ~/.local/share/gamechanger/gamechanger.py"' >> ~/.config/fish/config.fish
-    fi
-fi
-
-if [ -f ~/.bashrc ]; then
-    if ! grep -q "alias gc" ~/.bashrc 2>/dev/null; then
-        echo 'alias gc="python3 ~/.local/share/gamechanger/gamechanger.py"' >> ~/.bashrc
-        echo 'alias gamechanger="python3 ~/.local/share/gamechanger/gamechanger.py"' >> ~/.bashrc
-    fi
-fi
-
-# ============================================================
-# 9. Starte Service
-# ============================================================
-pkill -f "gamechanger_dbus.py" 2>/dev/null || true
-python3 ~/.local/bin/gamechanger_dbus.py &
-echo -e "${GREEN}✅ Service gestartet${NC}"
-
-# ============================================================
-# 10. udev-Regel für LEDs
-# ============================================================
-echo -e "${YELLOW}💡 Schritt 10: Richte LED-Zugriff ein...${NC}"
-
-sudo tee /etc/udev/rules.d/98-leds.rules << 'EOF'
-ACTION=="add", SUBSYSTEM=="leds", KERNEL=="*capslock*", RUN+="/bin/chmod 666 /sys/class/leds/%k/brightness"
-ACTION=="add", SUBSYSTEM=="leds", KERNEL=="*numlock*", RUN+="/bin/chmod 666 /sys/class/leds/%k/brightness"
-ACTION=="add", SUBSYSTEM=="leds", KERNEL=="*scrolllock*", RUN+="/bin/chmod 666 /sys/class/leds/%k/brightness"
 EOF
 
+# Udev für LEDs
+sudo tee /etc/udev/rules.d/99-leds.rules << 'EOF'
+SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp video /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/brightness"
+EOF
 sudo udevadm control --reload-rules
-sudo udevadm trigger
+sudo groupadd video 2>/dev/null || true
+sudo usermod -aG video $USER
 
-echo -e "${GREEN}✅ LED-Zugriff eingerichtet${NC}"
-
-# ============================================================
-# 11. udev-Regel für NUBWO Headset
-# ============================================================
-echo -e "${YELLOW}🎧 Schritt 11: Richte NUBWO Headset ein...${NC}"
-
-sudo tee /etc/udev/rules.d/99-nubwo.rules << 'EOF'
-KERNEL=="hidraw*", ATTRS{idVendor}=="10d6", ATTRS{idProduct}=="4801", MODE="0666"
+echo ""
+echo "✅ GameChanger installiert!"
+echo "🚀 Starte mit: gamechanger"
 EOF
 
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+# Mach ausführbar
+chmod +x install.sh
 
-echo -e "${GREEN}✅ NUBWO Headset eingerichtet${NC}"
-
-# ============================================================
-# 12. Fertig!
-# ============================================================
-echo ""
-echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║${RED}     🎮${YELLOW}  G A M E C H A N G E R  ${GREEN}I N S T A L L I E R T  ${RED}  🎮${GREEN}     ║${NC}"
-echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "${BLUE}✨ Was jetzt?${NC}"
-echo -e "  ${GREEN}▶${NC} Terminal: ${YELLOW}gc${NC} oder ${YELLOW}gamechanger${NC}"
-echo -e "  ${GREEN}▶${NC} Autostart: Läuft im Hintergrund"
-echo -e "  ${GREEN}▶${NC} LEDs: Blinken bei Alarm!"
-echo ""
-echo -e "${YELLOW}💡 Tipp:${NC} Logge dich einmal aus und wieder ein!"
-echo ""
+# Commit und Push
+git add install.sh
+git commit -m "Update: 100% independent version - no OpenRGB needed!"
+git push
