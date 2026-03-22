@@ -1,11 +1,11 @@
 #!/bin/bash
-# GameChanger Ultimate Installer
-# All-in-One: Hauptprogramm + Game Profiler + OpenRGB-Server + Draggable Dashboard
+# GameChanger Ultimate Installer v2.1
+# Mit KDE-Plasmoid-Integration für alle User!
 
 set -e
 
-echo "🎮 GameChanger Ultimate Installer"
-echo "================================"
+echo "🎮 GameChanger Ultimate Installer v2.1"
+echo "======================================"
 echo ""
 
 # ========== 1. SYSTEM-CHECKS ==========
@@ -15,11 +15,11 @@ if ! command -v python3 &> /dev/null; then
 fi
 echo "✅ Python3 gefunden: $(python3 --version)"
 
-# ========== 2. ABHÄNGIGKEITEN ==========
+# ========== 2. ABHÄNGIGKEITEN (mit DBus!) ==========
 echo ""
 echo "📦 Installiere Abhängigkeiten..."
 if command -v pacman &> /dev/null; then
-    sudo pacman -S python-gobject gtk3 libappindicator-gtk3 --noconfirm 2>/dev/null || true
+    sudo pacman -S python-gobject gtk3 libappindicator-gtk3 python-psutil python-dbus dbus-python --noconfirm 2>/dev/null || true
 fi
 
 # ========== 3. VERZEICHNISSE ==========
@@ -29,16 +29,17 @@ mkdir -p ~/.local/bin
 mkdir -p ~/.local/share/gamechanger
 mkdir -p ~/.config/autostart
 mkdir -p ~/.config/gamechanger/profiles
-mkdir -p ~/.config/gamechanger/games
+mkdir -p ~/.local/share/plasma/plasmoids/gamechanger@plasma/contents/ui
 
-# ========== 4. HAUPTPROGRAMM (mit Draggable Dashboard) ==========
+# ========== 4. HAUPTPROGRAMM (mit DBus für KDE-Integration) ==========
 echo ""
-echo "🐍 Installiere GameChanger..."
+echo "🐍 Installiere GameChanger mit DBus..."
+
 cat > ~/.local/share/gamechanger/gamechanger.py << 'EOF'
 #!/usr/bin/env python3
 """
-GameChanger Ultimate - Gaming Kontrollzentrum
-Mit schwebendem Dashboard, LevelBar und Game Profiler
+GameChanger v2.1 - Gaming Control Center
+Mit DBus für KDE-Plasmoid-Integration
 """
 
 import os
@@ -47,176 +48,159 @@ import subprocess
 import threading
 import gi
 import glob
+import psutil
+import json
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, GLib, AppIndicator3, Gdk
 
+# DBus für KDE-Integration
+import dbus
+import dbus.service
+from dbus.mainloop.glib import DBusGMainLoop
+
 SYS_PATH = "/sys/class/power_supply/"
+HWMON_PATH = "/sys/class/hwmon/"
+PROFILES_PATH = os.path.expanduser("~/.config/gamechanger/profiles/profiles.json")
 
-# ========== TERMINAL-ERKENNUNG ==========
-def get_terminal():
-    terminals = ["konsole", "gnome-terminal", "xterm", "alacritty", "kitty"]
-    for term in terminals:
-        if os.path.exists(f"/usr/bin/{term}") or os.path.exists(f"/usr/local/bin/{term}"):
-            return term
-    return "xterm"
-
-TERMINAL = get_terminal()
-
-# ========== OPENRGB SERVER ==========
-def start_openrgb_server():
-    try:
-        subprocess.run(["openrgb", "--version"], capture_output=True, timeout=2)
-        result = subprocess.run(["pgrep", "-f", "openrgb --server"], capture_output=True)
-        if result.returncode != 0:
-            subprocess.Popen(["openrgb", "--server"], 
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-    except:
+# ========== DBus SERVICE FÜR KDE-PLASMOID ==========
+class GameChangerDBus(dbus.service.Object):
+    def __init__(self):
+        bus_name = dbus.service.BusName("org.gamechanger", bus=dbus.SessionBus())
+        dbus.service.Object.__init__(self, bus_name, "/org/gamechanger")
+    
+    @dbus.service.method("org.gamechanger", in_signature='', out_signature='s')
+    def GetData(self):
+        devices = get_battery_devices()
+        data = {}
+        for icon, name, level, charging in devices:
+            if level != "??":
+                data[name] = level
+        return json.dumps({"devices": data})
+    
+    @dbus.service.method("org.gamechanger", in_signature='', out_signature='')
+    def OpenDashboard(self):
+        subprocess.Popen(["python3", os.path.expanduser("~/.local/share/gamechanger/gamechanger.py"), "--dashboard"])
+    
+    @dbus.service.signal("org.gamechanger", signature='s')
+    def DataUpdated(self, data):
         pass
-    return False
 
-def start_game_profiler():
-    profiler_script = os.path.expanduser("~/.config/gamechanger/game_profiler.sh")
-    if os.path.exists(profiler_script):
-        subprocess.Popen(["bash", profiler_script], 
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    return False
-
-# ========== LED CONTROLLER ==========
-class LEDController:
+# ========== HARDWARE-MONITORING ==========
+class HardwareMonitor:
     def __init__(self):
-        self.leds = self.find_leds()
-        self.running = False
-        self.lock = threading.Lock()
+        self.gpu_temp = 0
+        self.gpu_fan = 0
+        self.cpu_temp = 0
+        self.cpu_usage = 0
+        self.cpu_freq = 0
+        self.ram_usage = 0
         
-    def find_leds(self):
-        leds = []
-        for pattern in ["/sys/class/leds/*capslock*/brightness", "/sys/class/leds/*numlock*/brightness"]:
-            for path in glob.glob(pattern):
-                if os.path.exists(path):
-                    leds.append(path)
-        return leds
-    
-    def set_leds(self, state):
-        for led in self.leds:
+    def update(self):
+        for hwmon in glob.glob(HWMON_PATH + "hwmon*"):
+            name_file = os.path.join(hwmon, "name")
+            if not os.path.exists(name_file):
+                continue
             try:
-                with open(led, 'w') as f:
-                    f.write("1" if state else "0")
+                with open(name_file) as f:
+                    name = f.read().strip()
+                if name == "amdgpu":
+                    temp_file = os.path.join(hwmon, "temp1_input")
+                    if os.path.exists(temp_file):
+                        with open(temp_file) as f:
+                            self.gpu_temp = int(f.read().strip()) / 1000
+                    fan_file = os.path.join(hwmon, "fan1_input")
+                    if os.path.exists(fan_file):
+                        with open(fan_file) as f:
+                            self.gpu_fan = int(f.read().strip())
+                elif name == "k10temp":
+                    temp_file = os.path.join(hwmon, "temp1_input")
+                    if os.path.exists(temp_file):
+                        with open(temp_file) as f:
+                            self.cpu_temp = int(f.read().strip()) / 1000
             except:
-                pass
+                continue
+        self.cpu_usage = psutil.cpu_percent()
+        self.cpu_freq = psutil.cpu_freq().current / 1000 if psutil.cpu_freq() else 0
+        self.ram_usage = psutil.virtual_memory().percent
     
-    def blink_pattern(self, pattern, duration=3):
-        with self.lock:
-            if not self.leds:
-                return
-            self.running = True
-            try:
-                if pattern == "rot":
-                    for _ in range(duration * 5):
-                        if not self.running: break
-                        self.set_leds(True); time.sleep(0.1)
-                        self.set_leds(False); time.sleep(0.1)
-                elif pattern == "gruen":
-                    for _ in range(duration):
-                        if not self.running: break
-                        self.set_leds(True); time.sleep(0.5)
-                        self.set_leds(False); time.sleep(0.5)
-                elif pattern == "blau":
-                    for _ in range(duration):
-                        if not self.running: break
-                        self.set_leds(True); time.sleep(0.2)
-                        self.set_leds(False); time.sleep(0.1)
-                        self.set_leds(True); time.sleep(0.2)
-                        self.set_leds(False); time.sleep(0.3)
-                elif pattern == "gelb":
-                    self.set_leds(True); time.sleep(duration)
-                    self.set_leds(False)
-                elif pattern == "alarm":
-                    for _ in range(duration * 10):
-                        if not self.running: break
-                        self.set_leds(True); time.sleep(0.05)
-                        self.set_leds(False); time.sleep(0.05)
-            finally:
-                self.set_leds(False)
-                self.running = False
-    
-    def stop(self):
-        self.running = False
-        time.sleep(0.05)
-        self.set_leds(False)
-    
-    def is_running(self):
-        return self.running
+    def get_status_text(self):
+        return f"🌡️ GPU: {self.gpu_temp:.0f}°C  🌀 Lüfter: {self.gpu_fan} RPM\n" \
+               f"🔥 CPU: {self.cpu_temp:.0f}°C  📊 {self.cpu_usage:.0f}%  ⚡ {self.cpu_freq:.1f} GHz\n" \
+               f"🧠 RAM: {self.ram_usage}%"
 
-# ========== OPENRGB CONTROLLER ==========
-class OpenRGBController:
+# ========== RGB CONTROLLER ==========
+class RGBController:
     def __init__(self):
-        self.available = self.check()
+        self.available = False
+        self.client = None
         self.devices = []
-        if self.available:
-            self.scan_devices()
-    
-    def check(self):
         try:
-            subprocess.run(["openrgb", "--version"], capture_output=True, timeout=2)
-            return True
+            import openrgb
+            from openrgb.utils import RGBColor
+            self.client = openrgb.OpenRGBClient()
+            self.available = True
+            self.devices = self.client.devices
+            print(f"✅ OpenRGB gefunden: {len(self.devices)} Geräte")
         except:
-            return False
-    
-    def scan_devices(self):
-        try:
-            result = subprocess.run(["openrgb", "--list-devices"], capture_output=True, text=True, timeout=5)
-            for line in result.stdout.split('\n'):
-                if "Device" in line:
-                    self.devices.append(line.strip())
-        except:
-            pass
+            print("⚠️ OpenRGB nicht verfügbar")
     
     def set_color(self, r, g, b):
         if not self.available:
             return False
         try:
-            subprocess.Popen(["openrgb", "--noautoconnect", "--color", f"{r},{g},{b}"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-        except:
-            return False
-    
-    def set_device_color(self, device_name, r, g, b):
-        if not self.available:
-            return False
-        try:
-            subprocess.Popen(["openrgb", "--noautoconnect", "--device", device_name, "--color", f"{r},{g},{b}"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-        except:
-            return False
-    
-    def load_profile(self, profile_name):
-        if not self.available:
-            return False
-        try:
-            subprocess.Popen(["openrgb", "--noautoconnect", "--profile", profile_name],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-        except:
-            return False
-    
-    def rescan(self):
-        if not self.available:
-            return False
-        try:
-            subprocess.run(["openrgb", "--rescan"], capture_output=True, timeout=5)
-            self.scan_devices()
+            from openrgb.utils import RGBColor
+            for device in self.devices:
+                device.set_color(RGBColor(r, g, b))
             return True
         except:
             return False
 
+# ========== GAME PROFILER ==========
+class GameProfiler:
+    def __init__(self):
+        self.profiles_dir = os.path.dirname(PROFILES_PATH)
+        os.makedirs(self.profiles_dir, exist_ok=True)
+        self.load_profiles()
+    
+    def load_profiles(self):
+        if os.path.exists(PROFILES_PATH):
+            with open(PROFILES_PATH) as f:
+                self.profiles = json.load(f)
+        else:
+            self.profiles = {
+                "Final Fantasy XIV": {"rgb": [255, 0, 0], "process": "ffxiv"},
+                "Cyberpunk 2077": {"rgb": [255, 0, 255], "process": "Cyberpunk2077"},
+                "Desktop": {"rgb": [0, 255, 0], "process": ""}
+            }
+            self.save_profiles()
+    
+    def save_profiles(self):
+        with open(PROFILES_PATH, 'w') as f:
+            json.dump(self.profiles, f, indent=2)
+    
+    def check_active_game(self):
+        for name, profile in self.profiles.items():
+            if profile.get("process") and profile["process"]:
+                if subprocess.run(["pgrep", "-f", profile["process"]], capture_output=True).returncode == 0:
+                    return name, profile
+        return "Desktop", self.profiles.get("Desktop", {"rgb": [0,255,0]})
+    
+    def get_game_list(self):
+        return [(name, profile) for name, profile in self.profiles.items() if name != "Desktop"]
+    
+    def add_game(self, name, process, rgb):
+        self.profiles[name] = {"rgb": rgb, "process": process}
+        self.save_profiles()
+    
+    def delete_game(self, name):
+        if name in self.profiles and name != "Desktop":
+            del self.profiles[name]
+            self.save_profiles()
+
 # ========== AKKU LOGIK ==========
-def get_devices():
+def get_battery_devices():
     devices = []
     if not os.path.exists(SYS_PATH):
         return devices
@@ -254,27 +238,25 @@ def get_devices():
 
 def system_update():
     cmd = "cachyos-rate-mirrors && sudo pacman -Syu" if os.path.exists("/usr/bin/cachyos-rate-mirrors") else "sudo pacman -Syu"
-    subprocess.Popen([TERMINAL, "-e", "bash", "-c", 
+    subprocess.Popen(["konsole", "-e", "bash", "-c", 
         f"echo '🔄 System-Update...'; {cmd}; echo ''; echo '✅ Fertig! Drücke Enter'; read"])
 
-# ========== SCHWEBENDES DASHBOARD (mit Dragging) ==========
+# ========== DASHBOARD ==========
 class FloatingDashboard:
     def __init__(self, parent):
         self.parent = parent
         self.window = Gtk.Window()
         self.window.set_title("🎮 GameChanger")
-        self.window.set_default_size(440, 520)
+        self.window.set_default_size(480, 650)
         self.window.set_position(Gtk.WindowPosition.CENTER)
         self.window.set_border_width(20)
         self.window.set_decorated(False)
         self.window.set_keep_above(False)
         
-        # Dragging Variablen
+        # Dragging
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.dragging = False
-        
-        # Event-Handler für Dragging
         self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | 
                                Gdk.EventMask.BUTTON_RELEASE_MASK | 
                                Gdk.EventMask.POINTER_MOTION_MASK)
@@ -292,17 +274,14 @@ class FloatingDashboard:
         }
         label { color: #cdd6f4; font-family: monospace; }
         .title { font-size: 18px; font-weight: bold; color: #a6e3a1; margin-bottom: 10px; }
-        .device-card { background-color: #313244; border-radius: 12px; padding: 10px 12px; margin: 5px 0; }
-        .level-bar { min-height: 12px; border-radius: 6px; }
-        levelbar trough { background-color: #1e1e2e; border-radius: 6px; min-height: 12px; }
-        levelbar block.filled { border-radius: 6px; }
-        .low-battery block.filled { background-color: #f38ba8; }
-        .good-battery block.filled { background-color: #a6e3a1; }
-        .warning-battery block.filled { background-color: #fab387; }
-        button { background-color: #45475a; color: #cdd6f4; border-radius: 10px; padding: 6px 12px; border: none; margin: 2px; }
+        .section { background-color: #313244; border-radius: 12px; padding: 10px; margin: 5px 0; }
+        .level-bar { min-height: 8px; border-radius: 4px; }
+        levelbar trough { background-color: #1e1e2e; border-radius: 4px; }
+        .good block.filled { background-color: #a6e3a1; }
+        .warning block.filled { background-color: #fab387; }
+        .critical block.filled { background-color: #f38ba8; }
+        button { background-color: #45475a; color: #cdd6f4; border-radius: 8px; padding: 5px 10px; }
         button:hover { background-color: #585b70; }
-        .rgb-btn { background-color: #313244; border-radius: 20px; padding: 8px 12px; font-size: 16px; }
-        .rgb-btn:hover { background-color: #585b70; }
         """
         css_provider = Gtk.CssProvider()
         css_provider.load_from_data(css)
@@ -315,7 +294,7 @@ class FloatingDashboard:
         # Header
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         title = Gtk.Label()
-        title.set_markup("<span size='x-large'>🎮 GameChanger</span>")
+        title.set_markup("<span size='x-large'>🎮 GameChanger v2.1</span>")
         title.get_style_context().add_class("title")
         header.pack_start(title, True, True, 0)
         close_btn = Gtk.Button(label="✕")
@@ -324,51 +303,41 @@ class FloatingDashboard:
         header.pack_end(close_btn, False, False, 0)
         self.box.pack_start(header, False, False, 0)
         
-        # RGB-Status
-        self.rgb_status = Gtk.Label()
-        if self.parent.openrgb.available:
-            self.rgb_status.set_markup("<span color='#a6e3a1'>🌈 OpenRGB-Modus aktiv</span>")
-        elif self.parent.led.leds:
-            self.rgb_status.set_markup("<span color='#fab387'>💡 LED-Modus aktiv (Caps/Num Lock)</span>")
-        else:
-            self.rgb_status.set_markup("<span color='#f38ba8'>⚠️ Keine RGB/LEDs verfügbar</span>")
-        self.box.pack_start(self.rgb_status, False, False, 0)
+        # Hardware Status
+        self.hardware_label = Gtk.Label()
+        self.hardware_label.set_markup("<span size='large'>🌡️ Hardware</span>")
+        self.box.pack_start(self.hardware_label, False, False, 0)
         
-        # RGB Schnellwahl
-        if self.parent.openrgb.available:
-            rgb_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            rgb_box.set_halign(Gtk.Align.CENTER)
-            colors = [
-                ("🔴", (255, 0, 0), "Rot"), ("🟢", (0, 255, 0), "Grün"), ("🔵", (0, 0, 255), "Blau"),
-                ("🟡", (255, 255, 0), "Gelb"), ("🟣", (255, 0, 255), "Pink"), ("⚪", (255, 255, 255), "Weiß"),
-                ("🌑", (0, 0, 0), "Aus")
-            ]
-            for icon, rgb, name in colors:
-                btn = Gtk.Button(label=icon)
-                btn.set_tooltip_text(name)
-                btn.get_style_context().add_class("rgb-btn")
-                btn.connect("clicked", lambda x, c=rgb: self.parent.set_openrgb_color(None, c))
-                rgb_box.pack_start(btn, False, False, 0)
-            self.box.pack_start(rgb_box, False, False, 5)
-            
-            rescan_btn = Gtk.Button(label="🔄 Geräte scannen")
-            rescan_btn.connect("clicked", self.parent.rescan_devices)
-            self.box.pack_start(rescan_btn, False, False, 0)
+        self.hardware_data = Gtk.Label()
+        self.hardware_data.set_markup("Lade...")
+        self.box.pack_start(self.hardware_data, False, False, 5)
         
-        # Geräte-Container
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroll.set_min_content_height(200)
-        self.device_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        scroll.add(self.device_container)
-        self.box.pack_start(scroll, True, True, 0)
+        # Batteries
+        self.battery_label = Gtk.Label()
+        self.battery_label.set_markup("<span size='large'>🔋 Akkus</span>")
+        self.box.pack_start(self.battery_label, False, False, 0)
         
-        # Update-Button
+        self.battery_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.box.pack_start(self.battery_container, False, False, 5)
+        
+        # Buttons
+        btn_box = Gtk.Box(spacing=10)
+        refresh_btn = Gtk.Button(label="🔄 Aktualisieren")
+        refresh_btn.connect("clicked", self.refresh)
+        btn_box.pack_start(refresh_btn, True, True, 0)
+        
+        edit_profiles_btn = Gtk.Button(label="🎮 Game Profile")
+        edit_profiles_btn.connect("clicked", self.open_profile_editor)
+        btn_box.pack_start(edit_profiles_btn, True, True, 0)
+        
         update_btn = Gtk.Button(label="🔄 System Update")
         update_btn.connect("clicked", lambda x: threading.Thread(target=system_update, daemon=True).start())
-        self.box.pack_start(update_btn, False, False, 0)
+        btn_box.pack_start(update_btn, True, True, 0)
+        
+        self.box.pack_start(btn_box, False, False, 0)
         
         self.window.show_all()
+        self.refresh()
     
     def on_button_press(self, widget, event):
         if event.button == 1:
@@ -377,8 +346,7 @@ class FloatingDashboard:
             self.dragging = True
     
     def on_button_release(self, widget, event):
-        if event.button == 1:
-            self.dragging = False
+        self.dragging = False
     
     def on_motion(self, widget, event):
         if self.dragging:
@@ -386,13 +354,21 @@ class FloatingDashboard:
             new_y = int(event.y_root - self.drag_start_y)
             self.window.move(new_x, new_y)
     
-    def refresh(self, devices):
-        for child in self.device_container.get_children():
-            self.device_container.remove(child)
+    def open_profile_editor(self, widget):
+        from profile_editor import ProfileEditor
+        ProfileEditor(self.parent.profiler, self)
+    
+    def refresh(self, widget=None):
+        self.parent.hardware.update()
+        self.hardware_data.set_markup(self.parent.hardware.get_status_text())
         
+        for child in self.battery_container.get_children():
+            self.battery_container.remove(child)
+        
+        devices = get_battery_devices()
         for icon, name, level, charging in devices:
-            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-            card.get_style_context().add_class("device-card")
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+            card.get_style_context().add_class("section")
             
             header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
             name_label = Gtk.Label()
@@ -414,95 +390,90 @@ class FloatingDashboard:
                 level_bar.set_min_value(0)
                 level_bar.set_max_value(100)
                 level_bar.set_value(level)
-                level_bar.set_size_request(200, 12)
+                level_bar.set_size_request(200, 8)
                 level_bar.get_style_context().add_class("level-bar")
                 if level <= 10:
-                    level_bar.get_style_context().add_class("low-battery")
+                    level_bar.get_style_context().add_class("critical")
                 elif level <= 20:
-                    level_bar.get_style_context().add_class("warning-battery")
+                    level_bar.get_style_context().add_class("warning")
                 else:
-                    level_bar.get_style_context().add_class("good-battery")
+                    level_bar.get_style_context().add_class("good")
                 
                 level_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
                 level_box.pack_start(level_bar, True, True, 0)
                 percent_label = Gtk.Label()
-                if level <= 10:
-                    percent_label.set_markup(f"<span color='#f38ba8'><b>{level}%</b></span>")
-                elif level <= 20:
-                    percent_label.set_markup(f"<span color='#fab387'><b>{level}%</b></span>")
-                else:
-                    percent_label.set_markup(f"<span color='#a6e3a1'><b>{level}%</b></span>")
+                percent_label.set_markup(f"{level}%")
                 level_box.pack_start(percent_label, False, False, 0)
-                card.pack_start(level_box, False, False, 2)
+                card.pack_start(level_box, False, False, 0)
             
-            self.device_container.pack_start(card, False, False, 0)
+            self.battery_container.pack_start(card, False, False, 0)
         
-        if not devices:
-            empty = Gtk.Label()
-            empty.set_markup("<span color='#f9e2af'>🔍 Keine Geräte gefunden</span>")
-            self.device_container.pack_start(empty, False, False, 0)
-        
-        self.device_container.show_all()
+        self.battery_container.show_all()
 
 # ========== HAUPTKLASSE ==========
 class GameChanger:
     def __init__(self):
-        start_openrgb_server()
-        start_game_profiler()
-        
         self.indicator = AppIndicator3.Indicator.new("gamechanger", "input-gaming", AppIndicator3.IndicatorCategory.SYSTEM_SERVICES)
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         
-        self.led = LEDController()
-        self.openrgb = OpenRGBController()
-        self.last_alarm = {}
+        self.hardware = HardwareMonitor()
+        self.rgb = RGBController()
+        self.profiler = GameProfiler()
         self.dashboard = None
+        self.last_alarm = {}
+        
+        # DBus für KDE starten
+        DBusGMainLoop(set_as_default=True)
+        self.dbus_service = GameChangerDBus()
         
         self.build_menu()
         self.indicator.set_menu(self.menu)
-        GLib.timeout_add_seconds(30, self.update)
-        self.update()
         
-        print("🎮 GameChanger läuft")
-        print(f"📺 Terminal: {TERMINAL}")
-        if self.openrgb.available:
-            print(f"✅ OpenRGB-Modus aktiv ({len(self.openrgb.devices)} Geräte)")
-        elif self.led.leds:
-            print(f"✅ LED-Modus aktiv ({len(self.led.leds)} LEDs)")
-        else:
-            print("⚠️ Keine RGB/LEDs verfügbar")
-
+        GLib.timeout_add_seconds(30, self.update_battery)
+        GLib.timeout_add_seconds(3, self.update_hardware)
+        self.update_battery()
+        self.update_hardware()
+        
+        # DBus Updates senden
+        GLib.timeout_add_seconds(30, self.send_dbus_update)
+        
+        print("🎮 GameChanger v2.1 läuft (mit KDE-Integration)")
+        if self.rgb.available:
+            print(f"✅ RGB aktiv ({len(self.rgb.devices)} Geräte)")
+    
+    def send_dbus_update(self):
+        devices = get_battery_devices()
+        data = {}
+        for icon, name, level, charging in devices:
+            if level != "??":
+                data[name] = level
+        self.dbus_service.DataUpdated(json.dumps({"devices": data}))
+        return True
+    
     def build_menu(self):
         self.menu = Gtk.Menu()
+        
         self.device_info = Gtk.MenuItem(label="🔍 Scanne...")
         self.device_info.set_sensitive(False)
         self.menu.append(self.device_info)
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        rgb_menu = Gtk.MenuItem(label="🌈 RGB Farben")
-        rgb_sub = Gtk.Menu()
+        self.hardware_info = Gtk.MenuItem(label="🌡️ Hardware...")
+        self.hardware_info.set_sensitive(False)
+        self.menu.append(self.hardware_info)
+        self.menu.append(Gtk.SeparatorMenuItem())
         
-        if self.openrgb.available:
+        if self.rgb.available:
+            rgb_menu = Gtk.MenuItem(label="🌈 RGB Farben")
+            rgb_sub = Gtk.Menu()
             for name, rgb in [("🔴 Rot", (255,0,0)), ("🟢 Grün", (0,255,0)), ("🔵 Blau", (0,0,255)),
                               ("🟡 Gelb", (255,255,0)), ("🟣 Pink", (255,0,255)), ("⚪ Weiß", (255,255,255)),
                               ("🌑 Aus", (0,0,0))]:
                 item = Gtk.MenuItem(label=name)
-                item.connect("activate", self.set_openrgb_color, rgb)
+                item.connect("activate", self.set_rgb, rgb)
                 rgb_sub.append(item)
-            self.menu.append(Gtk.SeparatorMenuItem())
-            rescan_item = Gtk.MenuItem(label="🔄 Geräte neu scannen")
-            rescan_item.connect("activate", self.rescan_devices)
-            self.menu.append(rescan_item)
-        else:
-            for name, pattern in [("🔴 Rot (LED blinkt)", "rot"), ("🟢 Grün (LED blinkt)", "gruen"),
-                                  ("🔵 Blau (LED blinkt)", "blau"), ("🟡 Gelb (LED an)", "gelb"),
-                                  ("⚪ Aus", "aus")]:
-                item = Gtk.MenuItem(label=name)
-                item.connect("activate", self.set_led_pattern, pattern)
-                rgb_sub.append(item)
-        
-        rgb_menu.set_submenu(rgb_sub)
-        self.menu.append(rgb_menu)
+            rgb_menu.set_submenu(rgb_sub)
+            self.menu.append(rgb_menu)
         
         dash = Gtk.MenuItem(label="📊 Dashboard")
         dash.connect("activate", self.open_dashboard)
@@ -519,57 +490,31 @@ class GameChanger:
         self.menu.append(quit_item)
         self.menu.show_all()
     
-    def set_openrgb_color(self, widget, rgb):
-        r, g, b = rgb
-        self.openrgb.set_color(r, g, b)
-        subprocess.run(["notify-send", "-a", "GameChanger", f"🌈 RGB", f"Farbe gesetzt: {r},{g},{b}"])
+    def set_rgb(self, widget, rgb):
+        self.rgb.set_color(*rgb)
+        subprocess.run(["notify-send", "-a", "GameChanger", f"🌈 RGB", f"Farbe gesetzt: {rgb}"])
     
-    def rescan_devices(self, widget):
-        if self.openrgb.rescan():
-            subprocess.run(["notify-send", "-a", "GameChanger", "🔄 RGB", "Geräte neu gescannt!"])
-            if self.dashboard and self.dashboard.window.get_visible():
-                self.dashboard.refresh(get_devices())
+    def update_hardware(self):
+        self.hardware.update()
+        self.hardware_info.set_label(f"🌡️ GPU: {self.hardware.gpu_temp:.0f}°C  🌀 {self.hardware.gpu_fan} RPM  |  🔥 CPU: {self.hardware.cpu_temp:.0f}°C  📊 {self.hardware.cpu_usage:.0f}%")
+        return True
     
-    def set_led_pattern(self, widget, pattern):
-        if pattern == "aus":
-            self.led.stop()
-        else:
-            if self.led.is_running():
-                self.led.stop()
-                time.sleep(0.1)
-            threading.Thread(target=self.led.blink_pattern, args=(pattern, 2), daemon=True).start()
-    
-    def update(self):
-        devices = get_devices()
+    def update_battery(self):
+        devices = get_battery_devices()
         count = len(devices)
-        lowest = min([l for _, _, l, _ in devices if l != "??"], default=100)
         
-        if count == 0:
-            self.indicator.set_icon("battery-missing")
-            self.device_info.set_label("🔍 Keine Geräte")
-        elif lowest <= 10:
-            self.indicator.set_icon("battery-caution")
-            self.device_info.set_label(f"🚨 {count} Geräte - KRITISCH!")
-            if not self.led.is_running():
-                threading.Thread(target=self.led.blink_pattern, args=("alarm", 2), daemon=True).start()
-        elif lowest <= 20:
-            self.indicator.set_icon("battery-low")
-            self.device_info.set_label(f"⚠️ {count} Geräte - niedrig")
+        game, profile = self.profiler.check_active_game()
+        if game != "Desktop":
+            self.device_info.set_label(f"🎮 {game} aktiv")
+            if self.rgb.available:
+                self.rgb.set_color(*profile.get("rgb", [0,255,0]))
         else:
-            self.indicator.set_icon("input-gaming")
             self.device_info.set_label(f"🎮 {count} Geräte")
         
         for _, name, level, _ in devices:
             if level != "??" and level <= 15 and level != self.last_alarm.get(name, 100):
                 subprocess.run(["notify-send", "-u", "critical", f"⚠️ {name}", f"{level}%!"])
-                if not self.led.is_running():
-                    threading.Thread(target=self.led.blink_pattern, args=("alarm", 3), daemon=True).start()
                 self.last_alarm[name] = level
-            elif level != "??" and level > 20:
-                self.last_alarm[name] = 100
-        
-        if self.dashboard and self.dashboard.window.get_visible():
-            self.dashboard.refresh(devices)
         
         return True
     
@@ -578,17 +523,132 @@ class GameChanger:
             self.dashboard.window.present()
             return
         self.dashboard = FloatingDashboard(self)
-        self.dashboard.refresh(get_devices())
         self.dashboard.window.show_all()
 
 if __name__ == "__main__":
-    hub = GameChanger()
-    Gtk.main()
+    import sys
+    if "--dashboard" in sys.argv:
+        hub = GameChanger()
+        hub.open_dashboard(None)
+        Gtk.main()
+    else:
+        hub = GameChanger()
+        Gtk.main()
 EOF
 
 chmod +x ~/.local/share/gamechanger/gamechanger.py
 
-# ========== 5. STARTER ==========
+# ========== 5. KDE-PLASMOID ==========
+echo ""
+echo "🎨 Installiere KDE-Plasmoid..."
+
+cat > ~/.local/share/plasma/plasmoids/gamechanger@plasma/metadata.desktop << 'EOF'
+[Desktop Entry]
+Name=GameChanger
+Comment=Gaming Battery Monitor
+Type=Service
+X-KDE-ServiceTypes=Plasma/Applet
+X-KDE-PluginInfo-Author=Remo-afk
+X-KDE-PluginInfo-Email=remo@github.com
+X-KDE-PluginInfo-Name=gamechanger
+X-KDE-PluginInfo-Version=2.1
+X-KDE-PluginInfo-Website=https://github.com/Remo-afk/GameChanger
+X-KDE-PluginInfo-Category=System
+X-Plasma-API=declarativeappletscript
+X-Plasma-MainScript=ui/main.qml
+Icon=battery-full
+EOF
+
+cat > ~/.local/share/plasma/plasmoids/gamechanger@plasma/contents/ui/main.qml << 'EOF'
+import QtQuick 2.0
+import org.kde.plasma.core 2.0 as PlasmaCore
+import org.kde.plasma.components 3.0 as PlasmaComponents
+
+PlasmaCore.IconItem {
+    id: root
+    width: 24
+    height: 24
+    icon: "battery-full"
+    
+    property variant batteryData: ({})
+    property int lowestPercent: 100
+    
+    PlasmaCore.DataSource {
+        id: dbusSource
+        engine: "dbus"
+        connected: true
+        service: "org.gamechanger"
+        path: "/org/gamechanger"
+        interface: "org.gamechanger"
+        
+        onDataChanged: {
+            var data = dbusSource.data["DataUpdated"]
+            if (data) parseData(data.value)
+        }
+        
+        function callGetData() {
+            var reply = dbusSource.call("GetData", "")
+            if (reply && reply.length > 0) parseData(reply[0])
+        }
+    }
+    
+    function parseData(data) {
+        try {
+            var json = JSON.parse(data)
+            batteryData = json.devices || {}
+            lowestPercent = 100
+            for (var name in batteryData) {
+                if (batteryData[name] < lowestPercent) lowestPercent = batteryData[name]
+            }
+            if (lowestPercent <= 10) icon = "battery-caution"
+            else if (lowestPercent <= 20) icon = "battery-low"
+            else icon = "battery-full"
+            
+            var tooltip = ""
+            for (var name in batteryData) {
+                tooltip += name + ": " + batteryData[name] + "%\n"
+            }
+            root.toolTipMainText = "GameChanger"
+            root.toolTipSubText = tooltip
+        } catch(e) {}
+    }
+    
+    Component.onCompleted: {
+        dbusSource.callGetData()
+        timer.start()
+    }
+    
+    Timer {
+        id: timer
+        interval: 30000
+        running: true
+        repeat: true
+        onTriggered: dbusSource.callGetData()
+    }
+    
+    MouseArea {
+        anchors.fill: parent
+        onClicked: {
+            var menu = Qt.createQmlObject('import QtQuick.Controls 2.15; Menu {}', root)
+            for (var name in batteryData) {
+                var item = menu.addItem(name + ": " + batteryData[name] + "%")
+                item.enabled = false
+            }
+            menu.addSeparator()
+            var dashItem = menu.addItem("📊 Dashboard öffnen")
+            dashItem.triggered.connect(function() {
+                dbusSource.call("OpenDashboard", "")
+            })
+            menu.popup()
+        }
+    }
+}
+EOF
+
+# Plasmoid installieren
+plasmapkg2 --install ~/.local/share/plasma/plasmoids/gamechanger@plasma 2>/dev/null || true
+
+# ========== 6. STARTER ==========
 cat > ~/.local/bin/gamechanger << 'EOF'
 #!/bin/bash
 if pgrep -f "gamechanger.py" > /dev/null; then
@@ -599,58 +659,25 @@ nohup python3 ~/.local/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
 EOF
 chmod +x ~/.local/bin/gamechanger
 
-# ========== 6. GAME PROFILER (mit OpenRGB-Warteschleife) ==========
-echo ""
-echo "🎮 Installiere Game Profiler..."
-cat > ~/.config/gamechanger/game_profiler.sh << 'EOF'
-#!/bin/bash
-# GameChanger Game Profiler - Automatische RGB Profile
-# Mit OpenRGB-Warteschleife
-
-PROFILES_DIR="$HOME/.config/gamechanger/profiles"
-mkdir -p "$PROFILES_DIR"
-
-# Final Fantasy XIV Profil
-cat > "$PROFILES_DIR/final_fantasy.orp" << 'FFEOF'
-{"profile":[{"name":"Final Fantasy XIV","colors":[{"name":"Keyboard","color":[255,0,0]},{"name":"Mouse","color":[255,0,0]},{"name":"RAM","color":[255,0,0]},{"name":"GPU","color":[255,0,0]}]}]}
-FFEOF
-
-# Desktop Profil
-cat > "$PROFILES_DIR/desktop.orp" << 'DSEOF'
-{"profile":[{"name":"Desktop","colors":[{"name":"Keyboard","color":[0,255,0]},{"name":"Mouse","color":[0,255,0]},{"name":"RAM","color":[0,255,0]},{"name":"GPU","color":[0,255,0]}]}]}
-DSEOF
-
-current_profile=""
-load_profile() {
-    local profile="$1"
-    [ "$current_profile" = "$profile" ] && return
-    if openrgb --profile "$PROFILES_DIR/$profile" 2>/dev/null; then
-        current_profile="$profile"
-        notify-send -a "GameChanger" "🎨 RGB" "$profile aktiviert"
-    fi
+# ========== 7. GAME PROFILER JSON ==========
+cat > ~/.config/gamechanger/profiles/profiles.json << 'EOF'
+{
+  "Final Fantasy XIV": {
+    "rgb": [255, 0, 0],
+    "process": "ffxiv"
+  },
+  "Cyberpunk 2077": {
+    "rgb": [255, 0, 255],
+    "process": "Cyberpunk2077"
+  },
+  "Desktop": {
+    "rgb": [0, 255, 0],
+    "process": ""
+  }
 }
-
-echo "🔍 Warte auf OpenRGB..."
-until openrgb --version > /dev/null 2>&1; do
-    echo "⏳ OpenRGB noch nicht bereit, warte 2 Sekunden..."
-    sleep 2
-done
-echo "✅ OpenRGB gefunden!"
-echo "🎮 Game Profiler gestartet"
-
-while true; do
-    if pgrep -f "ffxiv" > /dev/null || pgrep -f "FINAL" > /dev/null; then
-        load_profile "final_fantasy.orp"
-    else
-        load_profile "desktop.orp"
-    fi
-    sleep 10
-done
 EOF
 
-chmod +x ~/.config/gamechanger/game_profiler.sh
-
-# ========== 7. AUTOSTART ==========
+# ========== 8. AUTOSTART ==========
 cat > ~/.config/autostart/gamechanger.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
@@ -661,17 +688,6 @@ Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
 
-cat > ~/.config/autostart/gamechanger-profiler.desktop << 'EOF'
-[Desktop Entry]
-Type=Application
-Name=GameChanger Profiler
-Exec=$HOME/.config/gamechanger/game_profiler.sh
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-EOF
-
-# ========== 8. DESKTOP-ENTRY ==========
 cat > ~/.local/share/applications/gamechanger.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
@@ -694,15 +710,27 @@ sudo udevadm control --reload-rules
 sudo groupadd video 2>/dev/null || true
 sudo usermod -aG video $USER
 
-# ========== 10. FERTIG! ==========
+# ========== 10. KDE NEUSTART ==========
+echo ""
+echo "🔄 Aktualisiere KDE..."
+# Sicherer Neustart von Plasma
+plasmashell --replace &
+sleep 2
+kquitapp5 plasmashell 2>/dev/null || true
+
+# ========== 11. FERTIG! ==========
 echo ""
 echo "=========================================="
-echo "✅ GameChanger Ultimate installiert!"
+echo "✅ GameChanger v2.1 installiert!"
 echo "=========================================="
 echo ""
 echo "🚀 Starte mit: gamechanger"
-echo "🔄 Das Icon erscheint in der Taskleiste"
+echo "🔄 Tray-Icon erscheint in der Taskleiste"
+echo "🎨 KDE-Plasmoid: Rechtsklick auf Taskleiste → Widgets hinzufügen → GameChanger"
 echo "🎮 Game Profiler: FFXIV → Rot, Desktop → Grün"
-echo "🖱️ Dashboard: Mit Maus verschiebbar!"
+echo "🖱 Dashboard: Mit Maus verschiebbar!"
 echo ""
 echo "💡 Nach dem Neustart startet GameChanger automatisch!"
+EOF
+
+chmod +x /mnt/Vault/Dev/GameChanger/install.sh
