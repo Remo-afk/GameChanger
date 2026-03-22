@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GameChanger v2.0 - Ultimate Gaming Control Center
-Mit intelligenter Hardware-Erkennung, OpenRGB-Wait und CPU-Auslastung
+GameChanger v2.2 - Gaming Control Center
+Mit DBus für KDE-Plasmoid-Integration
 """
 
 import os
@@ -12,6 +12,9 @@ import gi
 import glob
 import psutil
 import json
+import dbus
+import dbus.service
+from dbus.mainloop.glib import DBusGMainLoop
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
@@ -19,8 +22,56 @@ from gi.repository import Gtk, GLib, AppIndicator3, Gdk
 
 SYS_PATH = "/sys/class/power_supply/"
 HWMON_PATH = "/sys/class/hwmon/"
+PROFILES_PATH = os.path.expanduser("~/.config/gamechanger/profiles/profiles.json")
 
-# ========== HARDWARE-MONITORING (Intelligent) ==========
+# ========== DBus SERVICE FÜR KDE-PLASMOID ==========
+class GameChangerDBus(dbus.service.Object):
+    def __init__(self):
+        bus_name = dbus.service.BusName("org.gamechanger", bus=dbus.SessionBus())
+        dbus.service.Object.__init__(self, bus_name, "/org/gamechanger")
+    
+    @dbus.service.method("org.gamechanger", in_signature='', out_signature='s')
+    def GetData(self):
+        devices = get_battery_devices()
+        data = {}
+        for icon, name, level, charging in devices:
+            if level != "??":
+                data[name] = {"percent": level, "charging": charging}
+        return json.dumps({"battery": data})
+    
+    @dbus.service.method("org.gamechanger", in_signature='', out_signature='s')
+    def GetHardwareData(self):
+        """Sendet Hardware-Daten separat an KDE"""
+        devices = get_battery_devices()
+        battery_data = {}
+        for icon, name, level, charging in devices:
+            if level != "??":
+                battery_data[name] = {"percent": level, "charging": charging}
+        
+        hardware = HardwareMonitor()
+        hardware.update()
+        
+        return json.dumps({
+            "battery": battery_data,
+            "hardware": {
+                "gpu_temp": hardware.gpu_temp,
+                "gpu_fan": hardware.gpu_fan,
+                "cpu_temp": hardware.cpu_temp,
+                "cpu_usage": hardware.cpu_usage,
+                "cpu_freq": hardware.cpu_freq,
+                "ram_usage": hardware.ram_usage
+            }
+        })
+    
+    @dbus.service.method("org.gamechanger", in_signature='', out_signature='')
+    def OpenDashboard(self):
+        subprocess.Popen(["python3", os.path.expanduser("~/.local/share/gamechanger/gamechanger.py"), "--dashboard"])
+    
+    @dbus.service.signal("org.gamechanger", signature='s')
+    def DataUpdated(self, data):
+        pass
+
+# ========== HARDWARE-MONITORING ==========
 class HardwareMonitor:
     def __init__(self):
         self.gpu_temp = 0
@@ -31,7 +82,6 @@ class HardwareMonitor:
         self.ram_usage = 0
         
     def update(self):
-        # Dynamische Erkennung von GPU und CPU über name-Datei
         for hwmon in glob.glob(HWMON_PATH + "hwmon*"):
             name_file = os.path.join(hwmon, "name")
             if not os.path.exists(name_file):
@@ -39,21 +89,15 @@ class HardwareMonitor:
             try:
                 with open(name_file) as f:
                     name = f.read().strip()
-                
-                # AMD GPU (Sapphire)
                 if name == "amdgpu":
-                    # Temperatur
                     temp_file = os.path.join(hwmon, "temp1_input")
                     if os.path.exists(temp_file):
                         with open(temp_file) as f:
                             self.gpu_temp = int(f.read().strip()) / 1000
-                    # Lüfter
                     fan_file = os.path.join(hwmon, "fan1_input")
                     if os.path.exists(fan_file):
                         with open(fan_file) as f:
                             self.gpu_fan = int(f.read().strip())
-                
-                # AMD CPU (Ryzen 9600X)
                 elif name == "k10temp":
                     temp_file = os.path.join(hwmon, "temp1_input")
                     if os.path.exists(temp_file):
@@ -61,12 +105,8 @@ class HardwareMonitor:
                             self.cpu_temp = int(f.read().strip()) / 1000
             except:
                 continue
-        
-        # CPU Auslastung & Frequenz
         self.cpu_usage = psutil.cpu_percent()
         self.cpu_freq = psutil.cpu_freq().current / 1000 if psutil.cpu_freq() else 0
-        
-        # RAM Auslastung
         self.ram_usage = psutil.virtual_memory().percent
     
     def get_status_text(self):
@@ -74,31 +114,21 @@ class HardwareMonitor:
                f"🔥 CPU: {self.cpu_temp:.0f}°C  📊 {self.cpu_usage:.0f}%  ⚡ {self.cpu_freq:.1f} GHz\n" \
                f"🧠 RAM: {self.ram_usage}%"
 
-# ========== RGB CONTROLLER (mit OpenRGB-Wait) ==========
+# ========== RGB CONTROLLER ==========
 class RGBController:
     def __init__(self):
         self.available = False
         self.client = None
         self.devices = []
-        self.wait_for_openrgb()
-        
-    def wait_for_openrgb(self, timeout=10):
-        """Wartet auf OpenRGB-Server mit Retry"""
-        print("🔍 Warte auf OpenRGB...")
-        start = time.time()
-        while time.time() - start < timeout:
-            try:
-                import openrgb
-                from openrgb.utils import RGBColor
-                self.client = openrgb.OpenRGBClient()
-                self.available = True
-                self.devices = self.client.devices
-                print(f"✅ OpenRGB gefunden: {len(self.devices)} Geräte")
-                return True
-            except:
-                time.sleep(1)
-        print("⚠️ OpenRGB nicht verfügbar (Timeout)")
-        return False
+        try:
+            import openrgb
+            from openrgb.utils import RGBColor
+            self.client = openrgb.OpenRGBClient()
+            self.available = True
+            self.devices = self.client.devices
+            print(f"✅ OpenRGB gefunden: {len(self.devices)} Geräte")
+        except:
+            print("⚠️ OpenRGB nicht verfügbar")
     
     def set_color(self, r, g, b):
         if not self.available:
@@ -110,56 +140,28 @@ class RGBController:
             return True
         except:
             return False
-    
-    def set_device_color(self, device_name, r, g, b):
-        if not self.available:
-            return False
-        try:
-            from openrgb.utils import RGBColor
-            for device in self.devices:
-                if device_name.lower() in device.name.lower():
-                    device.set_color(RGBColor(r, g, b))
-                    return True
-        except:
-            pass
-        return False
 
 # ========== GAME PROFILER ==========
 class GameProfiler:
     def __init__(self):
-        self.profiles_dir = os.path.expanduser("~/.config/gamechanger/profiles")
+        self.profiles_dir = os.path.dirname(PROFILES_PATH)
         os.makedirs(self.profiles_dir, exist_ok=True)
         self.load_profiles()
     
     def load_profiles(self):
-        profile_file = os.path.join(self.profiles_dir, "profiles.json")
-        if os.path.exists(profile_file):
-            with open(profile_file) as f:
+        if os.path.exists(PROFILES_PATH):
+            with open(PROFILES_PATH) as f:
                 self.profiles = json.load(f)
         else:
-            # Standard-Profile
             self.profiles = {
-                "Final Fantasy XIV": {
-                    "rgb": [255, 0, 0],
-                    "performance": "gaming",
-                    "process": "ffxiv"
-                },
-                "Cyberpunk 2077": {
-                    "rgb": [255, 0, 255],
-                    "performance": "gaming",
-                    "process": "Cyberpunk2077"
-                },
-                "Desktop": {
-                    "rgb": [0, 255, 0],
-                    "performance": "powersave",
-                    "process": ""
-                }
+                "Final Fantasy XIV": {"rgb": [255, 0, 0], "process": "ffxiv"},
+                "Cyberpunk 2077": {"rgb": [255, 0, 255], "process": "Cyberpunk2077"},
+                "Desktop": {"rgb": [0, 255, 0], "process": ""}
             }
             self.save_profiles()
     
     def save_profiles(self):
-        profile_file = os.path.join(self.profiles_dir, "profiles.json")
-        with open(profile_file, 'w') as f:
+        with open(PROFILES_PATH, 'w') as f:
             json.dump(self.profiles, f, indent=2)
     
     def check_active_game(self):
@@ -168,6 +170,18 @@ class GameProfiler:
                 if subprocess.run(["pgrep", "-f", profile["process"]], capture_output=True).returncode == 0:
                     return name, profile
         return "Desktop", self.profiles.get("Desktop", {"rgb": [0,255,0]})
+    
+    def get_game_list(self):
+        return [(name, profile) for name, profile in self.profiles.items() if name != "Desktop"]
+    
+    def add_game(self, name, process, rgb):
+        self.profiles[name] = {"rgb": rgb, "process": process}
+        self.save_profiles()
+    
+    def delete_game(self, name):
+        if name in self.profiles and name != "Desktop":
+            del self.profiles[name]
+            self.save_profiles()
 
 # ========== AKKU LOGIK ==========
 def get_battery_devices():
@@ -264,7 +278,7 @@ class FloatingDashboard:
         # Header
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         title = Gtk.Label()
-        title.set_markup("<span size='x-large'>🎮 GameChanger v2.0</span>")
+        title.set_markup("<span size='x-large'>🎮 GameChanger v2.2</span>")
         title.get_style_context().add_class("title")
         header.pack_start(title, True, True, 0)
         close_btn = Gtk.Button(label="✕")
@@ -386,35 +400,58 @@ class GameChanger:
         self.dashboard = None
         self.last_alarm = {}
         
+        # DBus für KDE starten
+        DBusGMainLoop(set_as_default=True)
+        self.dbus_service = GameChangerDBus()
+        
         self.build_menu()
         self.indicator.set_menu(self.menu)
         
-        # Updates
         GLib.timeout_add_seconds(30, self.update_battery)
-        GLib.timeout_add_seconds(3, self.update_hardware)  # Hardware öfter aktualisieren
+        GLib.timeout_add_seconds(3, self.update_hardware)
+        GLib.timeout_add_seconds(3, self.send_dbus_update)
         self.update_battery()
         self.update_hardware()
         
-        print("🎮 GameChanger v2.0 läuft")
+        print("🎮 GameChanger v2.2 läuft (mit KDE-Integration)")
         if self.rgb.available:
             print(f"✅ RGB aktiv ({len(self.rgb.devices)} Geräte)")
     
+    def send_dbus_update(self):
+        devices = get_battery_devices()
+        battery_data = {}
+        for icon, name, level, charging in devices:
+            if level != "??":
+                battery_data[name] = {"percent": level, "charging": charging}
+        
+        hardware = HardwareMonitor()
+        hardware.update()
+        
+        self.dbus_service.DataUpdated(json.dumps({
+            "battery": battery_data,
+            "hardware": {
+                "gpu_temp": hardware.gpu_temp,
+                "gpu_fan": hardware.gpu_fan,
+                "cpu_temp": hardware.cpu_temp,
+                "cpu_usage": hardware.cpu_usage,
+                "cpu_freq": hardware.cpu_freq,
+                "ram_usage": hardware.ram_usage
+            }
+        }))
+        return True
+    
     def build_menu(self):
         self.menu = Gtk.Menu()
-        
-        # Geräte-Info
         self.device_info = Gtk.MenuItem(label="🔍 Scanne...")
         self.device_info.set_sensitive(False)
         self.menu.append(self.device_info)
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        # Hardware Status
         self.hardware_info = Gtk.MenuItem(label="🌡️ Hardware...")
         self.hardware_info.set_sensitive(False)
         self.menu.append(self.hardware_info)
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        # RGB Menü
         if self.rgb.available:
             rgb_menu = Gtk.MenuItem(label="🌈 RGB Farben")
             rgb_sub = Gtk.Menu()
@@ -427,7 +464,6 @@ class GameChanger:
             rgb_menu.set_submenu(rgb_sub)
             self.menu.append(rgb_menu)
         
-        # Dashboard
         dash = Gtk.MenuItem(label="📊 Dashboard")
         dash.connect("activate", self.open_dashboard)
         self.menu.append(dash)
@@ -456,7 +492,6 @@ class GameChanger:
         devices = get_battery_devices()
         count = len(devices)
         
-        # Game Profiler
         game, profile = self.profiler.check_active_game()
         if game != "Desktop":
             self.device_info.set_label(f"🎮 {game} aktiv")
@@ -465,7 +500,6 @@ class GameChanger:
         else:
             self.device_info.set_label(f"🎮 {count} Geräte")
         
-        # Warnungen
         for _, name, level, _ in devices:
             if level != "??" and level <= 15 and level != self.last_alarm.get(name, 100):
                 subprocess.run(["notify-send", "-u", "critical", f"⚠️ {name}", f"{level}%!"])
@@ -481,5 +515,11 @@ class GameChanger:
         self.dashboard.window.show_all()
 
 if __name__ == "__main__":
-    hub = GameChanger()
-    Gtk.main()
+    import sys
+    if "--dashboard" in sys.argv:
+        hub = GameChanger()
+        hub.open_dashboard(None)
+        Gtk.main()
+    else:
+        hub = GameChanger()
+        Gtk.main()
