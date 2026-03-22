@@ -1,220 +1,141 @@
-cd /mnt/Vault/Dev/GameChanger
+#!/bin/bash
+# GameChanger Ultimate Installer v2.2
+# Mit KDE-Plasmoid-Integration für alle User!
 
-# Erstelle die Ordnerstruktur für das Plasmoid
-mkdir -p gamechanger@plasma/contents/ui
+set -e
 
-# Erstelle metadata.desktop
-cat > gamechanger@plasma/metadata.desktop << 'EOF'
-[Desktop Entry]
-Name=GameChanger
-Comment=Gaming Control Center
-Type=Service
-X-KDE-ServiceTypes=Plasma/Applet
-X-KDE-PluginInfo-Author=Remo-afk
-X-KDE-PluginInfo-Email=remo@github.com
-X-KDE-PluginInfo-Name=gamechanger
-X-KDE-PluginInfo-Version=2.2
-X-KDE-PluginInfo-Website=https://github.com/Remo-afk/GameChanger
-X-KDE-PluginInfo-Category=System
-X-Plasma-API=declarativeappletscript
-X-Plasma-MainScript=ui/main.qml
-Icon=battery-full
+echo "🎮 GameChanger Ultimate Installer v2.2"
+echo "======================================"
+echo ""
+
+# ========== 1. SYSTEM-CHECKS ==========
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Python3 nicht gefunden!"
+    exit 1
+fi
+echo "✅ Python3 gefunden: $(python3 --version)"
+
+# ========== 2. ABHÄNGIGKEITEN ==========
+echo ""
+echo "📦 Installiere Abhängigkeiten..."
+if command -v pacman &> /dev/null; then
+    sudo pacman -S python-gobject gtk3 libappindicator-gtk3 python-psutil python-dbus --noconfirm 2>/dev/null || true
+fi
+
+# ========== 3. VERZEICHNISSE ==========
+echo ""
+echo "📁 Erstelle Verzeichnisse..."
+mkdir -p ~/.local/bin
+mkdir -p ~/.local/share/gamechanger
+mkdir -p ~/.config/autostart
+mkdir -p ~/.config/gamechanger/profiles
+mkdir -p ~/.local/share/plasma/plasmoids
+
+# ========== 4. HAUPTPROGRAMM ==========
+echo ""
+echo "🐍 Installiere GameChanger..."
+
+# Kopiere gamechanger.py (muss im aktuellen Ordner sein)
+if [ -f "./gamechanger.py" ]; then
+    cp ./gamechanger.py ~/.local/share/gamechanger/gamechanger.py
+else
+    echo "❌ gamechanger.py nicht gefunden!"
+    exit 1
+fi
+chmod +x ~/.local/share/gamechanger/gamechanger.py
+
+# ========== 5. STARTER ==========
+cat > ~/.local/bin/gamechanger << 'EOF'
+#!/bin/bash
+if pgrep -f "gamechanger.py" > /dev/null; then
+    echo "🎮 GameChanger läuft bereits!"
+    exit 0
+fi
+nohup python3 ~/.local/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
 EOF
+chmod +x ~/.local/bin/gamechanger
 
-# Erstelle main.qml
-cat > gamechanger@plasma/contents/ui/main.qml << 'EOF'
-import QtQuick 2.15
-import QtQuick.Layouts 1.15
-import org.kde.plasma.core 2.0 as PlasmaCore
-import org.kde.plasma.components 3.0 as PlasmaComponents
-import org.kde.plasma.extras 2.0 as PlasmaExtras
-
-PlasmaExtras.Representation {
-    id: root
-    width: 380
-    height: contentItem.implicitHeight + PlasmaCore.Units.largeSpacing * 2
-    
-    property variant batteryData: ({})
-    property variant hardwareData: ({})
-    
-    header: PlasmaExtras.Title {
-        text: i18n("GameChanger – Gaming Control Center")
-        icon: "input-gaming"
-    }
-    
-    contentItem: ColumnLayout {
-        id: contentItem
-        spacing: PlasmaCore.Units.smallSpacing
-        width: root.width
-        
-        PlasmaComponents.Label {
-            text: i18n("⚡ System Status")
-            font.bold: true
-            opacity: 0.7
-            Layout.fillWidth: true
-            Layout.topMargin: PlasmaCore.Units.smallSpacing
-        }
-        
-        GridLayout {
-            columns: 2
-            rowSpacing: PlasmaCore.Units.smallSpacing
-            columnSpacing: PlasmaCore.Units.largeSpacing
-            Layout.fillWidth: true
-            
-            PlasmaComponents.Label { text: "🌡️ GPU:" }
-            PlasmaComponents.Label { text: (hardwareData.gpu_temp || "0") + "°C" }
-            
-            PlasmaComponents.Label { text: "🌀 GPU Lüfter:" }
-            PlasmaComponents.Label { text: (hardwareData.gpu_fan || "0") + " RPM" }
-            
-            PlasmaComponents.Label { text: "🔥 CPU:" }
-            PlasmaComponents.Label { text: (hardwareData.cpu_temp || "0") + "°C" }
-            
-            PlasmaComponents.Label { text: "📊 CPU Auslastung:" }
-            PlasmaComponents.Label { text: (hardwareData.cpu_usage || "0") + "%" }
-            
-            PlasmaComponents.Label { text: "⚡ CPU Takt:" }
-            PlasmaComponents.Label { text: (hardwareData.cpu_freq || "0") + " GHz" }
-            
-            PlasmaComponents.Label { text: "🧠 RAM:" }
-            PlasmaComponents.Label { text: (hardwareData.ram_usage || "0") + "%" }
-        }
-        
-        PlasmaComponents.Separator { Layout.fillWidth: true }
-        
-        PlasmaComponents.Label {
-            text: i18n("🔋 Gaming Akkus")
-            font.bold: true
-            opacity: 0.7
-            Layout.fillWidth: true
-        }
-        
-        Repeater {
-            model: Object.keys(batteryData).length > 0 ? Object.keys(batteryData) : ["Keine Geräte"]
-            
-            delegate: ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 0
-                
-                visible: batteryData[modelData] !== undefined || modelData === "Keine Geräte"
-                
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: PlasmaCore.Units.smallSpacing
-                    
-                    PlasmaCore.IconItem {
-                        source: {
-                            if (modelData === "Keine Geräte") return "dialog-warning"
-                            if (modelData.includes("G502")) return "input-mouse"
-                            if (modelData.includes("G515")) return "input-keyboard"
-                            if (modelData.includes("PS5")) return "gamepad-symbolic"
-                            return "battery-full"
-                        }
-                        width: PlasmaCore.Units.iconSizes.small
-                        height: width
-                    }
-                    
-                    PlasmaComponents.Label {
-                        text: modelData === "Keine Geräte" ? "Keine Geräte gefunden" : modelData
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                    }
-                    
-                    PlasmaComponents.Label {
-                        visible: modelData !== "Keine Geräte"
-                        text: (batteryData[modelData]?.percent || "0") + "%"
-                        opacity: 0.7
-                    }
-                }
-                
-                PlasmaComponents.ProgressBar {
-                    visible: modelData !== "Keine Geräte"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: PlasmaCore.Units.gridUnit * 0.8
-                    value: (batteryData[modelData]?.percent || 0) / 100
-                    
-                    background: Rectangle {
-                        color: PlasmaCore.ColorScope.backgroundColor
-                        radius: 2
-                    }
-                    
-                    contentItem: Rectangle {
-                        color: {
-                            var percent = batteryData[modelData]?.percent || 0
-                            if (percent <= 10) return "#f38ba8"
-                            if (percent <= 20) return "#fab387"
-                            return "#a6e3a1"
-                        }
-                        radius: 2
-                    }
-                }
-                
-                PlasmaComponents.Label {
-                    visible: modelData !== "Keine Geräte" && batteryData[modelData]?.charging === true
-                    text: "⚡ LÄDT"
-                    font.pointSize: 8
-                    opacity: 0.6
-                    Layout.alignment: Qt.AlignRight
-                }
-            }
-        }
-        
-        PlasmaComponents.Button {
-            text: i18n("📊 Dashboard öffnen")
-            icon.name: "settings-configure"
-            Layout.fillWidth: true
-            Layout.topMargin: PlasmaCore.Units.smallSpacing
-            onClicked: {
-                dbusSource.call("OpenDashboard", "")
-            }
-        }
-    }
-    
-    PlasmaCore.DataSource {
-        id: dbusSource
-        engine: "dbus"
-        connected: true
-        service: "org.gamechanger"
-        path: "/org/gamechanger"
-        interface: "org.gamechanger"
-        
-        onDataChanged: {
-            var data = dbusSource.data["DataUpdated"]
-            if (data) {
-                try {
-                    var json = JSON.parse(data.value)
-                    if (json.battery) batteryData = json.battery
-                    if (json.hardware) hardwareData = json.hardware
-                } catch(e) {}
-            }
-        }
-        
-        function callGetData() {
-            var reply = dbusSource.call("GetHardwareData", "")
-            if (reply && reply.length > 0) {
-                try {
-                    var json = JSON.parse(reply[0])
-                    if (json.battery) batteryData = json.battery
-                    if (json.hardware) hardwareData = json.hardware
-                } catch(e) {}
-            }
-        }
-    }
-    
-    Timer {
-        interval: 3000
-        running: true
-        repeat: true
-        onTriggered: dbusSource.callGetData()
-    }
-    
-    Component.onCompleted: {
-        dbusSource.callGetData()
-    }
+# ========== 6. GAME PROFILER JSON ==========
+cat > ~/.config/gamechanger/profiles/profiles.json << 'EOF'
+{
+  "Final Fantasy XIV": {
+    "rgb": [255, 0, 0],
+    "process": "ffxiv"
+  },
+  "Cyberpunk 2077": {
+    "rgb": [255, 0, 255],
+    "process": "Cyberpunk2077"
+  },
+  "Desktop": {
+    "rgb": [0, 255, 0],
+    "process": ""
+  }
 }
 EOF
 
-# Jetzt die Dateien zu GitHub hinzufügen
-git add gamechanger@plasma
-git commit -m "Add KDE Plasmoid with native look"
-git push
+# ========== 7. KDE-PLASMOID ==========
+echo ""
+echo "🎨 Installiere KDE-Plasmoid..."
+
+if [ -d "./gamechanger@plasma" ]; then
+    # Lösche alte Installation
+    rm -rf ~/.local/share/plasma/plasmoids/gamechanger@plasma
+    # Kopiere das gesamte Plasmoid-Verzeichnis
+    cp -r ./gamechanger@plasma ~/.local/share/plasma/plasmoids/
+    echo "✅ Plasmoid kopiert"
+else
+    echo "❌ gamechanger@plasma Ordner nicht gefunden!"
+    exit 1
+fi
+
+# ========== 8. AUTOSTART ==========
+cat > ~/.config/autostart/gamechanger.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=GameChanger
+Exec=$HOME/.local/bin/gamechanger
+Icon=battery-full
+Terminal=false
+X-GNOME-Autostart-enabled=true
+EOF
+
+cat > ~/.local/share/applications/gamechanger.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=GameChanger
+Comment=Ultimate Gaming Control Center
+Exec=$HOME/.local/bin/gamechanger
+Icon=battery-full
+Categories=System;Utility;
+Terminal=false
+StartupNotify=false
+EOF
+
+# ========== 9. UDEV REGEL ==========
+echo ""
+echo "💡 Richte LED-Zugriff ein..."
+sudo tee /etc/udev/rules.d/99-leds.rules << 'EOF'
+SUBSYSTEM=="leds", ACTION=="add", RUN+="/bin/chgrp video /sys%p/brightness", RUN+="/bin/chmod g+w /sys%p/brightness"
+EOF
+sudo udevadm control --reload-rules
+sudo groupadd video 2>/dev/null || true
+sudo usermod -aG video $USER
+
+# ========== 10. KDE NEUSTART ==========
+echo ""
+echo "🔄 Aktualisiere KDE..."
+plasmashell --replace &
+
+# ========== 11. FERTIG! ==========
+echo ""
+echo "=========================================="
+echo "✅ GameChanger v2.2 installiert!"
+echo "=========================================="
+echo ""
+echo "🚀 Starte mit: gamechanger"
+echo "🔄 Tray-Icon erscheint in der Taskleiste"
+echo "🎨 KDE-Plasmoid: Rechtsklick auf Taskleiste → Widgets hinzufügen → GameChanger"
+echo "🎮 Game Profiler: FFXIV → Rot, Desktop → Grün"
+echo "🖱 Dashboard: Mit Maus verschiebbar!"
+echo ""
+echo "💡 Nach dem Neustart startet GameChanger automatisch!"
