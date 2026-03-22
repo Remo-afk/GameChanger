@@ -9,70 +9,56 @@
                                                       |___/            
            🛡️  Hybrid Battery & Hardware Hub v1.0 BETA
            The smartest way to monitor your gaming gear on Linux.
+cat > /mnt/Vault/Dev/GameChanger/README.md << 'EOF'
+# 🎮 GameChanger v2.1 – The Ultimate Gaming Control Center
 
-GameChanger bridges the gap between the Linux kernel and your hardware. It monitors batteries and triggers intelligent visual alerts using whatever your system offers.
-✨ Key Features
-🛡️ Hybrid Alert System
+**GameChanger** ist ein vollständiges Gaming-Kontrollzentrum für CachyOS/Arch Linux. Es überwacht deine Hardware, steuert RGB-Beleuchtung und passt sich automatisch an deine Spiele an – alles in einem eleganten Tray-Icon.
 
-    OpenRGB Mode: Full RGB effects on compatible keyboards
+[![GitHub Release](https://img.shields.io/github/v/release/Remo-afk/GameChanger)](https://github.com/Remo-afk/GameChanger/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![AUR](https://img.shields.io/aur/version/gamechanger)](https://aur.archlinux.org/packages/gamechanger)
 
-    LED Fallback: Caps/Num/Scroll Lock LEDs blink automatically (No OpenRGB needed!)
+---
 
-    Desktop Notifications: Always active as a reliable backup
+## ✨ Features
 
-🎮 Universal Recognition
+### 🖥️ Hardware-Monitoring
+- **GPU** – Temperatur, Lüftergeschwindigkeit (AMD/amdgpu)
+- **CPU** – Temperatur, Auslastung, Taktrate (AMD/k10temp)
+- **RAM** – Aktuelle Auslastung
+- **Echtzeit-Updates** – Alle 3 Sekunden im Tray
 
-    ✅ PS5 DualSense Controller (Full support)
+### 🔋 Akku-Monitoring
+- 🖱️ **Logitech G502 X / G515** – Akkustand in Prozent
+- 🎮 **PS5 DualSense** – Akku-Warnung mit LED-Alarm
+- 🎧 **NUBWO G06** – Automatische Headset-Erkennung
+- ⚡ **Lade-Status** – Erkennung, ob Gerät lädt
 
-    ✅ Logitech G-Series (G502 X, G515, etc.)
+### 🌈 RGB-Steuerung (OpenRGB SDK)
+- **Direkte Anbindung** – Kein subprocess, keine Verzögerung
+- **7 Farben** – Rot, Grün, Blau, Gelb, Pink, Weiß, Aus
+- **Auto-Fallback** – LED-Modus (Caps/Num Lock) wenn OpenRGB nicht verfügbar
 
-    ✅ NUBWO G06 Wireless Headset (Auto-discovery)
+### 🎮 Game Profiler
+- **Automatische Erkennung** – RGB wechselt beim Spielstart
+- **GUI-Editor** – Spiele hinzufügen, löschen, Farben wählen
+- **Beispiele** – Final Fantasy XIV → Rot, Cyberpunk → Pink
+- **Einfach erweiterbar** – JSON-Konfiguration im Hintergrund
 
-    ✅ Generic HID: Any device reporting battery to the Linux kernel
+### 📊 Dashboard
+- **Schwebendes Fenster** – Verschiebbar, ohne Rahmen
+- **LevelBars** – RPG-ähnliche Gesundheitsbalken für Akkus
+- **Hardware-Übersicht** – Alle wichtigen Werte auf einen Blick
 
-🎯 Smart Detection
+### 🛠️ System-Tools
+- **System Update** – Ein-Klick mit `cachyos-rate-mirrors`
+- **Autostart** – Startet mit deinem System
+- **Tray-Icon** – Farbcodierte Warnungen (Rot = kritisch)
+---
+## 📦 Installation
 
-    No-Sudo LED Access: Installer sets up permissions for blinking alerts
-
-    Resource Friendly: Optimized for high-end systems (developed on PCIe 5.0 SSD)
-
-    Zero Bloat: Pure Python, minimal dependencies
-
-🛠️ Installation
-
-git clone https://github.com/Remo-afk/GameChanger.git
-cd GameChanger
-chmod +x install.sh
-./install.sh
-
-🚀 How to use
-
-    Terminal: Simply type gc or gamechanger to see the live monitor
-
-    Autostart: The DBus service runs in the background and warns you via LEDs/RGB
-
-💡 Why GameChanger?
-
-Most Linux battery monitors just show numbers. GameChanger makes you FEEL when your gear is dying:
-
-    RGB Users: Your whole keyboard pulses red when the PS5 controller hits 15%
-
-    Budget/Clean Setups: Your Caps Lock LED flashes – impossible to miss even in-game!
-
-    Zero Config: It detects what you have and chooses the best warning method
-
-🤝 Contributing & Beta Testing
-
-This is a BETA. I need your help to grow:
-
-    Test the Alerts: Does your keyboard blink?
-
-    Report Hardware: If a device shows as "Unknown", open an Issue with your lsusb output
-
-    NUBWO Users: Help me decode the raw battery percentage for the G06!
-
-📄 License
-
-MIT - Free for everyone.
-
-Made for gamers, by gamers! 🔥
+### AUR (empfohlen)
+```bash
+paru -S gamechanger
+# oder
+yay -S gamechanger
