@@ -11,4 +11,5 @@ X-KDE-PluginInfo-Website=https://github.com/Remo-afk/GameChanger
 X-KDE-PluginInfo-Category=System
 X-Plasma-API=declarativeappletscript
 X-Plasma-MainScript=ui/main.qml
+X-Plasma-API-Minimum-Version=6.0
 Icon=battery-full
