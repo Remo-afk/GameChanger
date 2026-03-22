@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=GameChanger
+Comment=Gaming Control Center
+Type=Service
+X-KDE-ServiceTypes=Plasma/Applet
+X-KDE-PluginInfo-Author=Remo-afk
+X-KDE-PluginInfo-Email=remo@github.com
+X-KDE-PluginInfo-Name=gamechanger
+X-KDE-PluginInfo-Version=2.2
+X-KDE-PluginInfo-Website=https://github.com/Remo-afk/GameChanger
+X-KDE-PluginInfo-Category=System
+X-Plasma-API=declarativeappletscript
+X-Plasma-MainScript=ui/main.qml
+Icon=battery-full
