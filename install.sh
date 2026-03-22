@@ -1,6 +1,6 @@
 #!/bin/bash
 # GameChanger Ultimate Installer v2.2
-# Mit KDE-Plasmoid-Integration für alle User!
+# Mit gefiltertem Alias für saubere Terminal-Ausgabe
 
 set -e
 
@@ -44,7 +44,7 @@ else
 fi
 chmod +x ~/.local/share/gamechanger/gamechanger.py
 
-# ========== 5. STARTER ==========
+# ========== 5. STARTER (mit gefiltertem Alias) ==========
 cat > ~/.local/bin/gamechanger << 'EOF'
 #!/bin/bash
 if pgrep -f "gamechanger.py" > /dev/null; then
@@ -55,7 +55,29 @@ nohup python3 ~/.local/share/gamechanger/gamechanger.py > /dev/null 2>&1 &
 EOF
 chmod +x ~/.local/bin/gamechanger
 
-# ========== 6. GAME PROFILER JSON ==========
+# ========== 6. ALIAS MIT FILTER (für Terminal) ==========
+echo ""
+echo "⚡ Richte gefilterten Alias ein..."
+
+# Für Fish Shell
+if [ -d ~/.config/fish ]; then
+    # Lösche alte Aliase
+    sed -i '/alias gamechanger/d' ~/.config/fish/config.fish
+    sed -i '/alias gc/d' ~/.config/fish/config.fish
+    # Füge neue gefilterte Aliase hinzu
+    echo 'alias gamechanger="gamechanger 2>&1 | grep -v \"No sample format supported\""' >> ~/.config/fish/config.fish
+    echo 'alias gc="gamechanger 2>&1 | grep -v \"No sample format supported\""' >> ~/.config/fish/config.fish
+fi
+
+# Für Bash
+if [ -f ~/.bashrc ]; then
+    sed -i '/alias gamechanger/d' ~/.bashrc
+    sed -i '/alias gc/d' ~/.bashrc
+    echo 'alias gamechanger="gamechanger 2>&1 | grep -v \"No sample format supported\""' >> ~/.bashrc
+    echo 'alias gc="gamechanger 2>&1 | grep -v \"No sample format supported\""' >> ~/.bashrc
+fi
+
+# ========== 7. GAME PROFILER JSON ==========
 cat > ~/.config/gamechanger/profiles/profiles.json << 'EOF'
 {
   "Final Fantasy XIV": {
@@ -73,22 +95,19 @@ cat > ~/.config/gamechanger/profiles/profiles.json << 'EOF'
 }
 EOF
 
-# ========== 7. KDE-PLASMOID ==========
+# ========== 8. KDE-PLASMOID ==========
 echo ""
 echo "🎨 Installiere KDE-Plasmoid..."
 
 if [ -d "./gamechanger@plasma" ]; then
-    # Lösche alte Installation
     rm -rf ~/.local/share/plasma/plasmoids/gamechanger@plasma
-    # Kopiere das gesamte Plasmoid-Verzeichnis
     cp -r ./gamechanger@plasma ~/.local/share/plasma/plasmoids/
     echo "✅ Plasmoid kopiert"
 else
-    echo "❌ gamechanger@plasma Ordner nicht gefunden!"
-    exit 1
+    echo "⚠️ gamechanger@plasma Ordner nicht gefunden – überspringe Plasmoid"
 fi
 
-# ========== 8. AUTOSTART ==========
+# ========== 9. AUTOSTART ==========
 cat > ~/.config/autostart/gamechanger.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
@@ -111,7 +130,7 @@ Terminal=false
 StartupNotify=false
 EOF
 
-# ========== 9. UDEV REGEL ==========
+# ========== 10. UDEV REGEL ==========
 echo ""
 echo "💡 Richte LED-Zugriff ein..."
 sudo tee /etc/udev/rules.d/99-leds.rules << 'EOF'
@@ -121,21 +140,22 @@ sudo udevadm control --reload-rules
 sudo groupadd video 2>/dev/null || true
 sudo usermod -aG video $USER
 
-# ========== 10. KDE NEUSTART ==========
+# ========== 11. KDE NEUSTART ==========
 echo ""
 echo "🔄 Aktualisiere KDE..."
 plasmashell --replace &
 
-# ========== 11. FERTIG! ==========
+# ========== 12. FERTIG! ==========
 echo ""
 echo "=========================================="
 echo "✅ GameChanger v2.2 installiert!"
 echo "=========================================="
 echo ""
-echo "🚀 Starte mit: gamechanger"
+echo "🚀 Starte mit: gamechanger oder gc"
 echo "🔄 Tray-Icon erscheint in der Taskleiste"
 echo "🎨 KDE-Plasmoid: Rechtsklick auf Taskleiste → Widgets hinzufügen → GameChanger"
 echo "🎮 Game Profiler: FFXIV → Rot, Desktop → Grün"
 echo "🖱 Dashboard: Mit Maus verschiebbar!"
+echo "🔇 Audio-Fehler werden automatisch ausgeblendet"
 echo ""
 echo "💡 Nach dem Neustart startet GameChanger automatisch!"
